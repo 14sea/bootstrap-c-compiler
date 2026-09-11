@@ -132,7 +132,8 @@ writes hex0 assembly text.
   A type is encoded internally as a single integer: `0` = char, `1` = int,
   `t+2` = pointer to `t`.
 * **Declarations**: global variables and arrays, function definitions, prototypes,
-  comma separated declarators, local declarations anywhere inside a block.
+  comma separated declarators (which share one base type and pointer depth, see
+  "Known limits"), local declarations anywhere inside a block.
 * **Statements**: `{}`, `if` / `else`, `while`, `for`, `return`, `break`,
   `continue`, expression statements, the empty statement.
 * **Expressions**: `=`, `||`, `&&`, `|`, `^`, `&`, `==` `!=`, `<` `>` `<=` `>=`,
@@ -193,13 +194,59 @@ env/                 Python virtual environment (not tracked)
 * The locals of one function may not exceed 4096 bytes in total (the frame is
   fixed); put large buffers in global arrays.
 * At most 6 parameters per function; 4096 global symbols, 1024 locals per
-  function, 8192 string literals.
+  function, 8192 string literals, 1 MB of string bytes in total. **Only the
+  symbol counts and the frame size are actually checked and diagnosed**;
+  going past the string limits is not reported at all.
+* Source files up to 4 MB and generated assembly text up to 16 MB, likewise
+  unchecked.
 * A local declaration is scoped to the whole function (frame space is not reused
   when a block ends).
 * No type checking: assignment and argument passing simply move 8 bytes (or 1).
-* Source files up to 4 MB, generated assembly text up to 16 MB.
+* **The result of a call is always treated as `int`**; the callee's declared
+  return type is lost. So the result of a function returning a pointer cannot be
+  used directly with `[]`, `*` or pointer arithmetic (`char *f(); f()[0]` is
+  rejected, and `long *g(); g() + 1` steps by one byte instead of one element).
+  Assigning the result to a pointer variable first works around it.
+* **Comma separated declarators share one base type and pointer depth**:
+  `long *p, *q;` is rejected, and `long *p, n;` makes `n` a pointer too. One
+  name per declaration is the safe habit.
+* The compiler and `hex2bin` each issue a single `write` and ignore its result:
+  a failed write (a full device, say) is not reported and the process still
+  exits 0.
 
-## 9. Licence
+## 9. Changelog
+
+### 2026-09-11 — acting on [`review.txt`](review.txt)
+
+An independent review ([`review.txt`](review.txt)) rebuilt the whole chain and
+reproduced the same result (`cc1 == cc2 == cc3`, md5
+`28e0088aa8da1e6a3f9ea3e890583c91`, all seven tests passing), so the bootstrap
+conclusion is unchanged. Two of its findings were failure *detection* defects
+and are now fixed; several README statements were broader than the
+implementation and have been corrected.
+
+* **`build.sh` no longer swallows a fixpoint mismatch.** The comparisons were
+  written as `cmp A B && echo ...`, and a failing command on the left of an `&&`
+  list is exempt from `set -e`, so a broken bootstrap still ran to completion and
+  returned 0. Both comparisons are standalone commands now. Verified with a stub
+  `cmp` that fails only on cc2 versus cc3: the build aborts at the fixpoint check
+  and never reaches the test suite.
+* **`tests/run.sh` now checks exit status.** It compared output only, so a test
+  that printed the right thing and exited nonzero still passed, and conversion
+  failures were unchecked and could leave a stale binary behind. Verified by
+  making one test print its usual output and return 7, which is now reported as
+  `FAIL t01_arith (exit status 7)` and makes the runner exit nonzero.
+* **Four README claims were made accurate**: the restriction on comma separated
+  declarators, the loss of pointer return types at call sites, which capacity
+  limits are actually enforced, and the unchecked output writes.
+
+Findings left unfixed, now written into "Known limits": calls discard the
+callee's return type, comma separated declarators do not parse their own stars,
+the string buffers have no bounds checks, and output writes are unchecked. None
+of them is reachable from `cc.c` itself, which returns no pointers and declares
+one name per declaration, so the bootstrap and the fixpoint are unaffected.
+
+## 10. Licence
 
 The code and documentation are released under the MIT licence, see [LICENSE](LICENSE).
 

@@ -50,8 +50,14 @@ say "stage D3 cc3 = cc2(cc.c)"
 h2b build/cc3.hex build/cc3
 
 say "fixpoint check"
-cmp build/cc2 build/cc3 && echo "cc2 == cc3   (the compiler reproduces itself exactly)"
-cmp build/cc1 build/cc2 && echo "cc1 == cc2   (cc0 and cc emit identical code as well)"
+# Each comparison is a standalone command so that set -e aborts the build on a
+# mismatch.  Written as "cmp A B && echo ..." the failing cmp would be the left
+# hand side of an && list, which set -e deliberately ignores, and a broken
+# bootstrap would still report success.
+cmp build/cc2 build/cc3
+echo "cc2 == cc3   (the compiler reproduces itself exactly)"
+cmp build/cc1 build/cc2
+echo "cc1 == cc2   (cc0 and cc emit identical code as well)"
 cp build/cc2 build/cc
 md5sum build/cc1 build/cc2 build/cc3
 

@@ -12,12 +12,21 @@ for c in tests/*.c; do
   if ! ./build/hex0 < "build/t/$b.hasm" > "build/t/$b.hex" 2>"build/t/$b.err"; then
      echo "FAIL $b (assemble)"; cat "build/t/$b.err"; fail=1; continue
   fi
+  rm -f "build/t/$b"
   if [ -x ./build/hex2bin ]; then
-     ./build/hex2bin < "build/t/$b.hex" > "build/t/$b"; chmod +x "build/t/$b"
+     if ! ./build/hex2bin < "build/t/$b.hex" > "build/t/$b" || ! chmod +x "build/t/$b"; then
+        echo "FAIL $b (hex2bin)"; fail=1; continue
+     fi
   else
-     env/bin/python tools/hex2bin.py "build/t/$b.hex" "build/t/$b"
+     if ! env/bin/python tools/hex2bin.py "build/t/$b.hex" "build/t/$b"; then
+        echo "FAIL $b (hex2bin)"; fail=1; continue
+     fi
   fi
   "./build/t/$b" > "build/t/$b.out" 2>&1
+  st=$?
+  if [ "$st" != 0 ]; then
+     echo "FAIL $b (exit status $st)"; fail=1; continue
+  fi
   if cmp -s "build/t/$b.out" "tests/$b.exp"; then
      echo "ok   $b"
   else
