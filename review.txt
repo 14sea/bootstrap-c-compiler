@@ -1,0 +1,168 @@
+Code Review: Self-hosting C Subset Compiler
+Date: 2026-09-11
+
+Scope and validation
+--------------------
+Reviewed the bootstrap scripts, compiler, assembler, hexadecimal converters,
+documentation, and functional tests. Ran ./build.sh successfully in the current
+environment: all seven functional tests passed, and cc1, cc2, and cc3 were
+byte-for-byte identical, with MD5 28e0088aa8da1e6a3f9ea3e890583c91.
+
+The findings below were checked through source inspection and targeted
+reproduction cases. Fault injection into the build and test scripts was performed
+in an isolated copy under /tmp. Project source files were not modified during
+the review. This was a targeted review, not an exhaustive correctness proof.
+
+1. High: Failed bootstrap comparisons do not fail the build
+---------------------------------------------------------
+Location: build.sh:53-54
+
+Both fixed-point comparisons use the form:
+
+    cmp build/cc2 build/cc3 && echo "..."
+
+The failing left-hand command of an && list is exempt from set -e. Consequently,
+a mismatch prints a diagnostic but allows the script to copy the compiler,
+continue testing, and report completion.
+
+Reproduction: In an isolated copy, a PATH wrapper made both fixed-point cmp
+commands return 1 while forwarding every other comparison to the real cmp.
+The build still reached "done" and returned status 0.
+
+Impact: A future regression that breaks bootstrap reproducibility can pass the
+build, undermining one of the project's central verification guarantees. The
+current compiler binaries do match; this finding concerns failure detection.
+
+Recommendation: Run each mandatory comparison as a standalone command under
+set -e, or explicitly exit nonzero on failure. Print success only afterward.
+
+2. High: Function calls discard the declared return type
+------------------------------------------------------
+Location: stage2/cc.c:480
+
+gcall() unconditionally assigns curty = 1, treating every call result as an
+integer, even when an already-defined function returns a pointer. This causes
+both rejected expressions and silent errors in pointer arithmetic.
+
+Reproduction A:
+
+    char *text() { return "abc"; }
+    int main() { return text()[1]; }
+
+Compilation fails with "pointer required before [".
+
+Reproduction B:
+
+    long a[2];
+    long *get() { return a; }
+    int main() {
+        long *p;
+        a[0] = 0;
+        a[1] = 42;
+        p = get() + 1;
+        return *p;
+    }
+
+The generated program returns 0 instead of 42. The addition advances one byte
+instead of one eight-byte long because the call result lost its pointer type.
+
+Recommendation: Preserve the declared return type when compiling calls. Define
+how undeclared forward calls obtain their return types; resolving a function's
+address later does not provide the type needed for earlier code generation.
+Add regression coverage for dereferencing, indexing, and arithmetic on pointer
+return values.
+
+3. Medium: The test runner ignores program exit status
+----------------------------------------------------
+Location: tests/run.sh:15-21
+
+The runner executes each test and compares its output, but never checks the
+test process's exit status. The binary conversion and chmod steps also lack
+explicit failure handling, and the script does not use set -e.
+
+Reproduction: In the isolated copy, every test's main function was changed to
+return 7 while preserving its output. All seven tests still printed "ok", the
+runner printed "all tests passed", and the runner returned 0. An individual
+generated test executable was separately confirmed to return 7.
+
+Impact: Runtime failures that preserve the expected output can pass the suite.
+Conversion failures may also allow execution to proceed with an invalid or,
+in the Python fallback path, stale artifact.
+
+Recommendation: Check conversion, permission-setting, and execution results
+before comparing output. Require status 0 for the existing tests, and introduce
+explicit expected statuses if future tests intentionally return nonzero.
+
+4. Medium: Pointer declarators are parsed incorrectly in declaration lists
+------------------------------------------------------------------------
+Location: stage2/cc.c:745-759, 777-798, 944-964
+
+ptype() consumes pointer stars before the first identifier, and subsequent
+comma-separated declarators reuse that type without parsing their own stars.
+
+Reproduction:
+
+    int main() { long *p, *q; return 0; }
+
+This is rejected with "identifier expected". Conversely, in "long *p, n;",
+n is incorrectly treated as another pointer rather than an integer. A targeted
+case using p + n subsequently failed with "pointer required after *" because
+the expression was treated as pointer-plus-pointer and lost its pointer type.
+
+Impact: The implementation does not fully support the comma-separated
+declarators advertised in the README. The issue affects both local and global
+declaration parsing.
+
+Recommendation: Parse the base type once, then parse each declarator's pointer
+stars and array suffix independently. Test mixed scalar/pointer declarations
+and multiple pointer declarations in both scopes.
+
+5. Medium: Fixed buffers lack consistent bounds checks
+-----------------------------------------------------
+Location: stage2/cc.c:64-67, 236-251, 879-884, 1054-1059
+
+String bytes and string-table entries are written without checking the capacity
+of sbuf, sstart, or slen. Source reads, assembly output, and saved for-loop step
+code likewise advance through fixed buffers without enforcing their limits.
+In contrast, global/local symbol counts and function frame sizes have explicit
+checks.
+
+Reproduction: A source containing 8193 string literals compiled with status 0,
+despite the documented limit of 8192. A syntactically complete string containing
+1,300,000 characters was reported as an "unterminated string literal" after
+overflowing the 1,000,000-byte string buffer. The total source was only about
+1.3 MB, below the documented 4 MB source limit.
+
+Impact: Exceeding internal capacities can overwrite adjacent compiler state
+instead of producing a reliable limit diagnostic. The README does not document
+the aggregate string-byte limit that triggers the second reproduction.
+
+Recommendation: Check capacity before each write or append, reserve space for
+terminating NUL bytes, and limit reads to remaining input capacity. Add explicit
+diagnostics and tests at and just beyond the limits. Document any additional
+limits that remain part of the supported subset.
+
+6. Medium: Output errors are reported as successful compilation
+-------------------------------------------------------------
+Location: stage2/cc.c:1068-1069; tools/hex2bin.c:53-54
+
+The compiler and the self-hosted converter each issue a single sys_write,
+ignore its return value, and return success. A failed or partial write can
+therefore leave missing or truncated output without a failing process status.
+
+Reproduction: Compiling "int main() { return 0; }" with stdout redirected to
+/dev/full returned status 0 and produced no diagnostic, despite the failed
+write. The converter has the same unchecked-write pattern by inspection.
+
+Recommendation: Write until the complete output has been delivered, handle
+partial writes and recoverable interruptions, and return nonzero on a permanent
+error. Apply equivalent error handling to input reads, where errors are currently
+treated as end-of-file.
+
+Suggested repair order
+----------------------
+First make bootstrap and test failures reliably fail their scripts. Then fix
+return-type propagation and declarator parsing, adding the reproduction cases
+as regression tests. Follow with buffer limits and I/O error handling. Re-run
+the complete seed-to-compiler bootstrap and fixed-point comparisons after
+compiler changes, as well as the expanded functional and failure-path tests.
