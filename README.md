@@ -1,5 +1,25 @@
 # 从零自举的 C 子集编译器（Ubuntu / x86-64）
 
+<p align="center">
+  <a href="ref/idea.jpeg"><img src="ref/idea.jpeg" height="380" alt="出题的微博原帖"></a>
+  <a href="ref/result.02.png"><img src="ref/result.02.png" height="380" alt="build.sh 完整输出"></a>
+  <a href="ref/result.01.png"><img src="ref/result.01.png" height="380" alt="会话交付小结"></a>
+</p>
+
+> **缘起。** 这个仓库是对微博用户 tombkeeper 于 2026-09-11 所出题目的一次完整解答：
+> 不借助任何现成的编译器或汇编器，从一份手写的十六进制种子出发，一步步造出能自举的
+> C 子集编译器。原题的目标平台是 Windows x64，本仓库做的是 Ubuntu x86-64。
+> 全部代码由 Claude Code（Opus 5）在一次会话中写成。
+>
+> `ref/` 目录保留了这次工作的引用材料，各用一句话说明：
+>
+> | 材料 | 内容 |
+> |---|---|
+> | [`ref/idea.jpeg`](ref/idea.jpeg) | 出题的微博原帖截图：六条约束的题面，以及出题者自己那版 Windows 实现的构建日志（种子 → 模板展开器 → 引导编译器 → c0/c1/c2，SHA256 逐字节一致）。 |
+> | [`ref/prompt.txt`](ref/prompt.txt) | 实际交给 Claude Code 的提示词原文，也就是本仓库自始至终严格遵循的那六条规则。 |
+> | [`ref/result.01.png`](ref/result.01.png) | 会话结束时的交付小结截图：四阶段引导链表格、`cc1 == cc2 == cc3` 的同一个 md5，以及逐条要求的落实说明。 |
+> | [`ref/result.02.png`](ref/result.02.png) | `./build.sh` 的完整输出截图：从种子重建全部四个阶段、不动点校验通过、7 项功能测试全绿。 |
+
 全部产物都由本仓库自己的工具链生成。整条链的唯一起点是 `seed/hexa.hex`
 ——一份手写的十六进制机器码文本。链上除了"把十六进制文本转成字节"
 这一步之外，没有任何外部程序参与代码生成。
@@ -146,8 +166,9 @@ tools/ccc.sh         编译驱动：cc → hex0 → hex2bin
 tests/*.c *.exp      功能测试与期望输出
 tests/run.sh         测试运行器
 build.sh             从种子开始的完整可复现构建
-build/               构建产物
-env/                 Python 虚拟环境
+ref/                 出题原帖、提示词与运行结果截图
+build/               构建产物（不入库，由 build.sh 生成）
+env/                 Python 虚拟环境（不入库）
 ```
 
 ## 八、已知限制
@@ -157,3 +178,10 @@ env/                 Python 虚拟环境
 * 局部声明的作用域是整个函数（块内不回收帧空间）。
 * 无类型检查：赋值与实参传递只按 8 字节（或 1 字节）搬运。
 * 源文件上限 4 MB，生成的汇编文本上限 16 MB。
+
+## 九、许可
+
+代码与文档以 MIT 许可发布，见 [LICENSE](LICENSE)。
+
+`ref/` 目录是例外：其中 `ref/idea.jpeg` 是第三方微博内容的截图，仅作为出处引用收录，
+版权归原作者所有，不在 MIT 许可范围内。
