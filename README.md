@@ -1,3 +1,5 @@
+**简体中文** · [English](README.en.md)
+
 # 从零自举的 C 子集编译器（Ubuntu / x86-64）
 
 <p align="center">
