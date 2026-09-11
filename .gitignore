@@ -1,0 +1,16 @@
+# ---------------------------------------------------------------------
+# Build products.  Everything in build/ is regenerated from the sources
+# and the hand written seed by ./build.sh, so none of it is tracked.
+# ---------------------------------------------------------------------
+build/
+
+# Python virtual environment (created by build.sh with python3 -m venv)
+env/
+
+# Editor and OS noise
+*~
+*.swp
+*.swo
+.DS_Store
+.idea/
+.vscode/

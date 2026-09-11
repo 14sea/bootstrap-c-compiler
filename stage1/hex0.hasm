@@ -1,0 +1,464 @@
+# =====================================================================
+#  hex0 -- stage B assembler, written in the seed assembler's language
+#          (literal hex bytes + two character labels resolved by hexa).
+#
+#  Everything below is hand encoded x86-64; only label addresses and
+#  branch displacements are computed for us by hexa.
+#
+#  hex0 reads assembly source from stdin, writes resolved machine code to
+#  stdout as hexadecimal text.  Compared to the seed it adds:
+#
+#      %NAME bb bb ..   define macro NAME as that byte sequence
+#                       (body runs to end of line; may be any name)
+#      NAME             expand a previously defined macro
+#      :name            label of arbitrary length
+#      @name &name ~name $name    as in the seed, arbitrary length names
+#      # ... and ; ...  comments
+#
+#  Labels and macros live in open addressed hash tables (2^18 slots of
+#  16 bytes: name pointer + value).  Two passes.
+#
+#  memory:  0x00800000 input   0x02000000 output
+#           0x07000000 scratch 0x08000000 labels  0x08800000 macros
+#  regs:    rsi input cursor, rdi output cursor, rbx emit address,
+#           rbp pass number
+# =====================================================================
+7F 45 4C 46 02 01 01 00 00 00 00 00 00 00 00 00
+02 00 3E 00 01 00 00 00
+$st                                              # e_entry
+40 00 00 00 00 00 00 00                          # e_phoff
+00 00 00 00 00 00 00 00                          # e_shoff
+00 00 00 00 40 00 38 00 01 00 40 00 00 00 00 00
+01 00 00 00 07 00 00 00                          # PT_LOAD, RWX
+00 00 00 00 00 00 00 00                          # p_offset
+00 00 40 00 00 00 00 00                          # p_vaddr
+00 00 40 00 00 00 00 00                          # p_paddr
+~ze 00 00 00 00                                  # p_filesz
+00 00 00 09 00 00 00 00                          # p_memsz
+00 10 00 00 00 00 00 00                          # p_align
+
+# ---------------- hv : rax = char -> rax = hex value or -1 -----------
+:hv
+48 83 F8 30                # cmp  rax,0x30
+0F 82 @h2                  # jb   h2
+48 83 F8 39                # cmp  rax,0x39
+0F 87 @h1                  # ja   h1
+48 83 E8 30                # sub  rax,0x30
+C3                         # ret
+:h1
+48 83 F8 41                # cmp  rax,0x41
+0F 82 @h2                  # jb   h2
+48 83 F8 46                # cmp  rax,0x46
+0F 87 @h5                  # ja   h5
+48 83 E8 37                # sub  rax,0x37
+C3
+:h5
+48 83 F8 61                # cmp  rax,0x61
+0F 82 @h2                  # jb   h2
+48 83 F8 66                # cmp  rax,0x66
+0F 87 @h2                  # ja   h2
+48 83 E8 57                # sub  rax,0x57
+C3
+:h2
+48 C7 C0 FF FF FF FF       # mov  rax,-1
+C3
+
+# ---------------- hh : rax = name -> rax = slot byte offset ----------
+:hh
+48 C7 C1 05 15 00 00       # mov  rcx,5381
+:h3
+0F B6 10                   # movzx edx,byte [rax]
+80 FA 20                   # cmp  dl,0x20
+0F 86 @h4                  # jbe  h4
+48 6B C9 21                # imul rcx,rcx,33
+48 01 D1                   # add  rcx,rdx
+48 FF C0                   # inc  rax
+E9 @h3                     # jmp  h3
+:h4
+48 89 C8                   # mov  rax,rcx
+48 25 FF FF 03 00          # and  rax,0x3FFFF
+48 C1 E0 04                # shl  rax,4
+C3
+
+# ---------------- se : rax=p rcx=q -> rax = 1 if same name ----------
+:se
+:s1
+8A 10                      # mov  dl,[rax]
+8A 31                      # mov  dh,[rcx]
+80 FA 20                   # cmp  dl,0x20
+0F 87 @s2                  # ja   s2
+80 FE 20                   # cmp  dh,0x20
+0F 87 @s3                  # ja   s3
+B8 01 00 00 00             # mov  eax,1
+C3
+:s2
+38 F2                      # cmp  dl,dh
+0F 85 @s3                  # jne  s3
+48 FF C0                   # inc  rax
+48 FF C1                   # inc  rcx
+E9 @s1                     # jmp  s1
+:s3
+31 C0                      # xor  eax,eax
+C3
+
+# ---------------- fi : rax=name rcx=table -> rax = entry ------------
+:fi
+56                         # push rsi
+57                         # push rdi
+51                         # push rcx
+50                         # push rax
+E8 @hh                     # call hh
+5A                         # pop  rdx        (name)
+59                         # pop  rcx        (table)
+:f1
+48 89 CE                   # mov  rsi,rcx
+48 01 C6                   # add  rsi,rax
+48 8B 3E                   # mov  rdi,[rsi]
+48 85 FF                   # test rdi,rdi
+0F 84 @f2                  # jz   f2         (empty slot)
+50                         # push rax
+51                         # push rcx
+52                         # push rdx
+56                         # push rsi
+48 89 F8                   # mov  rax,rdi
+48 89 D1                   # mov  rcx,rdx
+E8 @se                     # call se
+5E                         # pop  rsi
+5A                         # pop  rdx
+59                         # pop  rcx
+48 85 C0                   # test rax,rax
+58                         # pop  rax
+0F 85 @f2                  # jnz  f2
+48 83 C0 10                # add  rax,16
+48 25 F0 FF 3F 00          # and  rax,0x3FFFF0
+E9 @f1                     # jmp  f1
+:f2
+48 89 F0                   # mov  rax,rsi
+5F                         # pop  rdi
+5E                         # pop  rsi
+C3
+
+# ---------------- e1 : emit the byte in dl --------------------------
+:e1
+48 83 FD 01                # cmp  rbp,1
+0F 84 @m3                  # je   m3
+88 D0                      # mov  al,dl
+C0 E8 04                   # shr  al,4
+3C 0A                      # cmp  al,10
+0F 82 @m1                  # jb   m1
+04 07                      # add  al,7
+:m1
+04 30                      # add  al,0x30
+88 07                      # mov  [rdi],al
+48 FF C7                   # inc  rdi
+88 D0                      # mov  al,dl
+24 0F                      # and  al,0x0F
+3C 0A                      # cmp  al,10
+0F 82 @m2                  # jb   m2
+04 07                      # add  al,7
+:m2
+04 30                      # add  al,0x30
+88 07                      # mov  [rdi],al
+48 FF C7                   # inc  rdi
+C6 07 0A                   # mov  byte [rdi],10
+48 FF C7                   # inc  rdi
+:m3
+C3
+
+# ---------------- en : emit rcx low bytes of rdx --------------------
+:en
+:n1
+51                         # push rcx
+52                         # push rdx
+E8 @e1                     # call e1
+5A                         # pop  rdx
+59                         # pop  rcx
+48 C1 EA 08                # shr  rdx,8
+48 FF C9                   # dec  rcx
+0F 85 @n1                  # jnz  n1
+C3
+
+# ---------------- sw : skip the current word ------------------------
+:sw
+:w1
+0F B6 06                   # movzx eax,byte [rsi]
+3C 20                      # cmp  al,0x20
+0F 86 @w2                  # jbe  w2
+48 FF C6                   # inc  rsi
+E9 @w1                     # jmp  w1
+:w2
+C3
+
+# ---------------- kl : skip to end of line --------------------------
+:kl
+:k1
+0F B6 06                   # movzx eax,byte [rsi]
+84 C0                      # test al,al
+0F 84 @k2                  # jz   k2
+48 FF C6                   # inc  rsi
+3C 0A                      # cmp  al,10
+0F 85 @k1                  # jne  k1
+:k2
+C3
+
+# ---------------- er : rax = name ; report and exit 3 ---------------
+:er
+48 C7 C1 00 00 00 07       # mov  rcx,0x7000000
+:p1
+0F B6 10                   # movzx edx,byte [rax]
+80 FA 20                   # cmp  dl,0x20
+0F 86 @p2                  # jbe  p2
+88 11                      # mov  [rcx],dl
+48 FF C1                   # inc  rcx
+48 FF C0                   # inc  rax
+E9 @p1                     # jmp  p1
+:p2
+C6 01 0A                   # mov  byte [rcx],10
+48 FF C1                   # inc  rcx
+48 C7 C6 00 00 00 07       # mov  rsi,0x7000000
+48 89 CA                   # mov  rdx,rcx
+48 29 F2                   # sub  rdx,rsi
+52                         # push rdx
+B8 01 00 00 00             # mov  eax,1
+BF 02 00 00 00             # mov  edi,2
+48 8D 34 25 &em            # lea  rsi,[em]
+BA 16 00 00 00             # mov  edx,22
+0F 05                      # syscall
+5A                         # pop  rdx
+B8 01 00 00 00             # mov  eax,1
+BF 02 00 00 00             # mov  edi,2
+48 C7 C6 00 00 00 07       # mov  rsi,0x7000000
+0F 05                      # syscall
+B8 3C 00 00 00             # mov  eax,60
+BF 03 00 00 00             # mov  edi,3
+0F 05                      # syscall
+:em
+68 65 78 30 3A 20 75 6E 64 65 66 69 6E 65 64 20 6E 61 6D 65 3A 20
+
+# ---------------- ru : one pass -------------------------------------
+:ru
+48 C7 C6 00 00 80 00       # mov  rsi,0x800000
+48 C7 C3 00 00 40 00       # mov  rbx,0x400000
+:r0
+0F B6 06                   # movzx eax,byte [rsi]
+84 C0                      # test al,al
+0F 84 @r9                  # jz   r9
+3C 20                      # cmp  al,0x20
+0F 87 @r1                  # ja   r1
+48 FF C6                   # inc  rsi
+E9 @r0                     # jmp  r0
+:r1
+3C 23                      # cmp  al,'#'
+0F 84 @r2                  # je   r2
+3C 3B                      # cmp  al,';'
+0F 85 @r3                  # jne  r3
+:r2
+E8 @kl                     # call kl
+E9 @r0                     # jmp  r0
+:r3
+3C 22                      # cmp  al,0x22   (")
+0F 84 @rz                  # je   rz
+3C 3A                      # cmp  al,':'
+0F 85 @r4                  # jne  r4
+48 FF C6                   # inc  rsi
+48 83 FD 01                # cmp  rbp,1
+0F 85 @qa                  # jne  qa
+48 89 F0                   # mov  rax,rsi
+48 C7 C1 00 00 00 08       # mov  rcx,0x8000000
+E8 @fi                     # call fi
+48 89 30                   # mov  [rax],rsi
+48 89 58 08                # mov  [rax+8],rbx
+:qa
+E8 @sw                     # call sw
+E9 @r0                     # jmp  r0
+:r4
+3C 25                      # cmp  al,'%'
+0F 85 @r5                  # jne  r5
+48 FF C6                   # inc  rsi
+48 83 FD 01                # cmp  rbp,1
+0F 85 @qb                  # jne  qb
+48 89 F0                   # mov  rax,rsi
+48 C7 C1 00 00 80 08       # mov  rcx,0x8800000
+E8 @fi                     # call fi
+48 89 30                   # mov  [rax],rsi
+50                         # push rax
+E8 @sw                     # call sw
+59                         # pop  rcx
+48 89 71 08                # mov  [rcx+8],rsi   (macro body)
+E9 @qc                     # jmp  qc
+:qb
+E8 @sw                     # call sw
+:qc
+E8 @kl                     # call kl
+E9 @r0                     # jmp  r0
+:r5
+3C 40                      # cmp  al,'@'
+0F 84 @r6                  # je   r6
+3C 26                      # cmp  al,'&'
+0F 84 @r6                  # je   r6
+3C 7E                      # cmp  al,'~'
+0F 84 @r6                  # je   r6
+3C 24                      # cmp  al,'$'
+0F 84 @r6                  # je   r6
+E9 @r8                     # jmp  r8
+:r6
+50                         # push rax           (sigil)
+48 FF C6                   # inc  rsi
+48 83 FD 01                # cmp  rbp,1
+0F 84 @qd                  # je   qd            (pass 1: no lookup)
+48 89 F0                   # mov  rax,rsi
+48 C7 C1 00 00 00 08       # mov  rcx,0x8000000
+E8 @fi                     # call fi
+48 8B 10                   # mov  rdx,[rax]
+48 85 D2                   # test rdx,rdx
+0F 85 @qe                  # jnz  qe
+48 89 F0                   # mov  rax,rsi
+E8 @er                     # call er            (no return)
+:qe
+48 8B 50 08                # mov  rdx,[rax+8]
+E9 @qf                     # jmp  qf
+:qd
+31 D2                      # xor  edx,edx
+:qf
+52                         # push rdx
+E8 @sw                     # call sw
+5A                         # pop  rdx
+58                         # pop  rax
+3C 24                      # cmp  al,'$'
+0F 85 @qg                  # jne  qg
+48 C7 C1 08 00 00 00       # mov  rcx,8
+E8 @en                     # call en
+48 83 C3 08                # add  rbx,8
+E9 @r0                     # jmp  r0
+:qg
+3C 40                      # cmp  al,'@'
+0F 85 @qh                  # jne  qh
+48 29 DA                   # sub  rdx,rbx
+48 83 EA 04                # sub  rdx,4
+E9 @qi                     # jmp  qi
+:qh
+3C 7E                      # cmp  al,'~'
+0F 85 @qi                  # jne  qi
+48 81 EA 00 00 40 00       # sub  rdx,0x400000
+:qi
+48 C7 C1 04 00 00 00       # mov  rcx,4
+E8 @en                     # call en
+48 83 C3 04                # add  rbx,4
+E9 @r0                     # jmp  r0
+:r8
+0F B6 46 02                # movzx eax,byte [rsi+2]
+3C 20                      # cmp  al,0x20
+0F 87 @r7                  # ja   r7            (long token -> macro)
+0F B6 06                   # movzx eax,byte [rsi]
+E8 @hv                     # call hv
+48 85 C0                   # test rax,rax
+0F 88 @r7                  # js   r7
+48 C1 E0 04                # shl  rax,4
+50                         # push rax
+0F B6 46 01                # movzx eax,byte [rsi+1]
+E8 @hv                     # call hv
+59                         # pop  rcx
+48 85 C0                   # test rax,rax
+0F 88 @r7                  # js   r7
+48 09 C8                   # or   rax,rcx
+48 89 C2                   # mov  rdx,rax
+48 83 C6 02                # add  rsi,2
+E8 @e1                     # call e1
+48 FF C3                   # inc  rbx
+E9 @r0                     # jmp  r0
+:r7
+48 89 F0                   # mov  rax,rsi
+48 C7 C1 00 00 80 08       # mov  rcx,0x8800000
+E8 @fi                     # call fi
+48 8B 10                   # mov  rdx,[rax]
+48 85 D2                   # test rdx,rdx
+0F 85 @qj                  # jnz  qj
+48 89 F0                   # mov  rax,rsi
+E8 @er                     # call er
+:qj
+48 8B 50 08                # mov  rdx,[rax+8]
+52                         # push rdx
+E8 @sw                     # call sw
+5A                         # pop  rdx
+56                         # push rsi
+48 89 D6                   # mov  rsi,rdx       (walk the macro body)
+:qk
+0F B6 06                   # movzx eax,byte [rsi]
+84 C0                      # test al,al
+0F 84 @qm                  # jz   qm
+3C 0A                      # cmp  al,10
+0F 84 @qm                  # je   qm
+3C 20                      # cmp  al,0x20
+0F 87 @ql                  # ja   ql
+48 FF C6                   # inc  rsi
+E9 @qk                     # jmp  qk
+:ql
+3C 23                      # cmp  al,'#'
+0F 84 @qm                  # je   qm
+3C 3B                      # cmp  al,';'
+0F 84 @qm                  # je   qm
+0F B6 06                   # movzx eax,byte [rsi]
+E8 @hv                     # call hv
+48 C1 E0 04                # shl  rax,4
+50                         # push rax
+0F B6 46 01                # movzx eax,byte [rsi+1]
+E8 @hv                     # call hv
+59                         # pop  rcx
+48 09 C8                   # or   rax,rcx
+48 89 C2                   # mov  rdx,rax
+48 83 C6 02                # add  rsi,2
+E8 @e1                     # call e1
+48 FF C3                   # inc  rbx
+E9 @qk                     # jmp  qk
+:qm
+5E                         # pop  rsi
+E9 @r0                     # jmp  r0
+:rz
+48 FF C6                   # inc  rsi  (skip opening quote)
+:qs
+0F B6 06                   # movzx eax,byte [rsi]
+84 C0                      # test al,al
+0F 84 @qt                  # jz   qt
+3C 22                      # cmp  al,0x22
+0F 84 @qu                  # je   qu
+48 89 C2                   # mov  rdx,rax
+E8 @e1                     # call e1
+48 FF C3                   # inc  rbx
+48 FF C6                   # inc  rsi
+E9 @qs                     # jmp  qs
+:qu
+48 FF C6                   # inc  rsi
+:qt
+E9 @r0                     # jmp  r0
+:r9
+C3
+
+# ---------------- _start ---------------------------------------------
+:st
+48 C7 C6 00 00 80 00       # mov  rsi,0x800000
+:t1
+B8 00 00 00 00             # mov  eax,0         (read)
+BF 00 00 00 00             # mov  edi,0
+BA 00 00 10 00             # mov  edx,0x100000
+0F 05                      # syscall
+48 85 C0                   # test rax,rax
+0F 8E @t2                  # jle  t2
+48 01 C6                   # add  rsi,rax
+E9 @t1                     # jmp  t1
+:t2
+C6 06 00                   # mov  byte [rsi],0
+48 C7 C7 00 00 00 02       # mov  rdi,0x2000000
+48 C7 C5 01 00 00 00       # mov  rbp,1
+E8 @ru                     # call ru
+48 C7 C5 02 00 00 00       # mov  rbp,2
+E8 @ru                     # call ru
+48 89 FA                   # mov  rdx,rdi
+48 C7 C6 00 00 00 02       # mov  rsi,0x2000000
+48 29 F2                   # sub  rdx,rsi
+B8 01 00 00 00             # mov  eax,1         (write)
+BF 01 00 00 00             # mov  edi,1
+0F 05                      # syscall
+B8 3C 00 00 00             # mov  eax,60        (exit)
+31 FF                      # xor  edi,edi
+0F 05                      # syscall
+:ze

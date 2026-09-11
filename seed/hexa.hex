@@ -1,0 +1,203 @@
+# =====================================================================
+#  hexa -- the seed assembler.  Hand written x86-64 machine code.
+#
+#  This file is the ONLY hand written binary in the whole project.  It is
+#  plain hexadecimal text; tools/hex2bin.py turns it into an ELF executable
+#  without interpreting anything.
+#
+#  hexa reads an assembly source from stdin and writes the resolved machine
+#  code to stdout AS HEXADECIMAL TEXT (two upper case digits + newline per
+#  byte).  Source syntax:
+#
+#      XX          one literal byte (two hex digits, upper case)
+#      :ab         define label "ab" (labels are exactly two characters)
+#      @ab         emit 4 bytes: rel32 from the end of the field to label ab
+#      &ab         emit 4 bytes: absolute virtual address of label ab
+#      ~ab         emit 4 bytes: file offset of label ab (address - 0x400000)
+#      $ab         emit 8 bytes: absolute virtual address of label ab
+#      # ...       comment to end of line
+#
+#  Two passes over the input: pass 1 records label addresses, pass 2 emits.
+#  Load address 0x400000, one RWX PT_LOAD segment, BSS supplied by memsz:
+#      0x00800000  input buffer
+#      0x02000000  output buffer
+#      0x06000000  label table, direct indexed by (c0<<8|c1)*8
+#
+#  Register usage inside the program:
+#      rsi = input cursor   rdi = output cursor
+#      rbx = current emit address     rbp = pass number (1 or 2)
+# =====================================================================
+
+# --------- ELF64 header ---------------------------------------------- 0x00
+7F 45 4C 46 02 01 01 00 00 00 00 00 00 00 00 00  # magic, 64bit, LSB, SysV
+02 00                                            # e_type   = ET_EXEC
+3E 00                                            # e_machine= x86-64
+01 00 00 00                                      # e_version
+E2 01 40 00 00 00 00 00                          # e_entry  = 0x4001E2
+40 00 00 00 00 00 00 00                          # e_phoff  = 0x40
+00 00 00 00 00 00 00 00                          # e_shoff  = 0
+00 00 00 00                                      # e_flags
+40 00                                            # e_ehsize
+38 00                                            # e_phentsize
+01 00                                            # e_phnum
+40 00                                            # e_shentsize
+00 00                                            # e_shnum
+00 00                                            # e_shstrndx
+# --------- program header -------------------------------------------- 0x40
+01 00 00 00                                      # p_type  = PT_LOAD
+07 00 00 00                                      # p_flags = RWX
+00 00 00 00 00 00 00 00                          # p_offset= 0
+00 00 40 00 00 00 00 00                          # p_vaddr = 0x400000
+00 00 40 00 00 00 00 00                          # p_paddr
+48 02 00 00 00 00 00 00                          # p_filesz= 0x248
+00 00 00 08 00 00 00 00                          # p_memsz = 0x8000000
+00 10 00 00 00 00 00 00                          # p_align = 0x1000
+
+# =========== EMIT1 : emit the byte in dl ============================= 0x78
+48 83 FD 01           # 0078  cmp  rbp,1          (pass 1 -> emit nothing)
+74 29                 # 007C  je   ret1
+88 D0                 # 007E  mov  al,dl
+C0 E8 04              # 0080  shr  al,4
+3C 0A                 # 0083  cmp  al,10
+72 02                 # 0085  jb   h1
+04 07                 # 0087  add  al,7
+04 30                 # 0089  h1: add al,0x30
+88 07                 # 008B  mov  [rdi],al
+48 FF C7              # 008D  inc  rdi
+88 D0                 # 0090  mov  al,dl
+24 0F                 # 0092  and  al,0x0F
+3C 0A                 # 0094  cmp  al,10
+72 02                 # 0096  jb   h2
+04 07                 # 0098  add  al,7
+04 30                 # 009A  h2: add al,0x30
+88 07                 # 009C  mov  [rdi],al
+48 FF C7              # 009E  inc  rdi
+C6 07 0A              # 00A1  mov  byte [rdi],0x0A
+48 FF C7              # 00A4  inc  rdi
+C3                    # 00A7  ret1: ret
+
+# =========== EMITN : emit rcx low bytes of rdx ======================= 0xA8
+51                    # 00A8  lp: push rcx
+52                    # 00A9  push rdx
+E8 C9 FF FF FF        # 00AA  call EMIT1
+5A                    # 00AF  pop  rdx
+59                    # 00B0  pop  rcx
+48 C1 EA 08           # 00B1  shr  rdx,8
+48 FF C9              # 00B5  dec  rcx
+75 EE                 # 00B8  jnz  lp
+C3                    # 00BA  ret
+
+# =========== RUN : one pass over the input =========================== 0xBB
+48 C7 C6 00 00 80 00  # 00BB  mov  rsi,0x800000       (input buffer)
+48 C7 C3 00 00 40 00  # 00C2  mov  rbx,0x400000       (emit address)
+0F B6 06              # 00C9  TOP: movzx eax,byte [rsi]
+84 C0                 # 00CC  test al,al
+0F 84 0D 01 00 00     # 00CE  jz   DONE
+3C 20                 # 00D4  cmp  al,0x20
+77 05                 # 00D6  ja   NOTWS
+48 FF C6              # 00D8  inc  rsi
+EB EC                 # 00DB  jmp  TOP
+3C 23                 # 00DD  NOTWS: cmp al,'#'
+75 10                 # 00DF  jne  N1
+48 FF C6              # 00E1  SKIPL: inc rsi
+0F B6 06              # 00E4  movzx eax,byte [rsi]
+84 C0                 # 00E7  test al,al
+74 DE                 # 00E9  jz   TOP
+3C 0A                 # 00EB  cmp  al,10
+75 F2                 # 00ED  jne  SKIPL
+EB D8                 # 00EF  jmp  TOP
+3C 3A                 # 00F1  N1: cmp al,':'
+75 24                 # 00F3  jne  N2
+48 83 FD 01           # 00F5  cmp  rbp,1
+75 15                 # 00F9  jne  SKIP3
+0F B6 46 01           # 00FB  movzx eax,byte [rsi+1]
+C1 E0 08              # 00FF  shl  eax,8
+0F B6 4E 02           # 0102  movzx ecx,byte [rsi+2]
+09 C8                 # 0106  or   eax,ecx
+48 89 1C C5 00 00 00 06 # 0108 mov [0x6000000+rax*8],rbx
+48 83 C6 03           # 0110  SKIP3: add rsi,3
+E9 B0 FF FF FF        # 0114  jmp  TOP
+3C 40                 # 0119  N2: cmp al,'@'
+74 11                 # 011B  je   REF
+3C 26                 # 011D  cmp  al,'&'
+74 0D                 # 011F  je   REF
+3C 7E                 # 0121  cmp  al,'~'
+74 09                 # 0123  je   REF
+3C 24                 # 0125  cmp  al,'$'
+74 05                 # 0127  je   REF
+E9 87 00 00 00        # 0129  jmp  HEXP
+0F B6 4E 01           # 012E  REF: movzx ecx,byte [rsi+1]
+C1 E1 08              # 0132  shl  ecx,8
+0F B6 56 02           # 0135  movzx edx,byte [rsi+2]
+09 D1                 # 0139  or   ecx,edx
+48 8B 14 CD 00 00 00 06 # 013B mov rdx,[0x6000000+rcx*8]
+48 83 C6 03           # 0143  add  rsi,3
+3C 40                 # 0147  cmp  al,'@'
+75 1C                 # 0149  jne  R2
+48 29 DA              # 014B  sub  rdx,rbx
+48 83 EA 04           # 014E  sub  rdx,4
+48 C7 C1 04 00 00 00  # 0152  mov  rcx,4
+E8 4A FF FF FF        # 0159  call EMITN
+48 83 C3 04           # 015E  add  rbx,4
+E9 62 FF FF FF        # 0162  jmp  TOP
+3C 26                 # 0167  R2: cmp al,'&'
+75 15                 # 0169  jne  R3
+48 C7 C1 04 00 00 00  # 016B  mov  rcx,4
+E8 31 FF FF FF        # 0172  call EMITN
+48 83 C3 04           # 0177  add  rbx,4
+E9 49 FF FF FF        # 017B  jmp  TOP
+3C 7E                 # 0180  R3: cmp al,'~'
+75 1C                 # 0182  jne  R4
+48 81 EA 00 00 40 00  # 0184  sub  rdx,0x400000
+48 C7 C1 04 00 00 00  # 018B  mov  rcx,4
+E8 11 FF FF FF        # 0192  call EMITN
+48 83 C3 04           # 0197  add  rbx,4
+E9 29 FF FF FF        # 019B  jmp  TOP
+48 C7 C1 08 00 00 00  # 01A0  R4: mov rcx,8       ('$' = 64 bit address)
+E8 FC FE FF FF        # 01A7  call EMITN
+48 83 C3 08           # 01AC  add  rbx,8
+E9 14 FF FF FF        # 01B0  jmp  TOP
+2C 30                 # 01B5  HEXP: sub al,0x30
+3C 09                 # 01B7  cmp  al,9
+76 02                 # 01B9  jbe  h1
+2C 07                 # 01BB  sub  al,7
+C0 E0 04              # 01BD  h1: shl al,4
+88 C2                 # 01C0  mov  dl,al
+0F B6 46 01           # 01C2  movzx eax,byte [rsi+1]
+2C 30                 # 01C6  sub  al,0x30
+3C 09                 # 01C8  cmp  al,9
+76 02                 # 01CA  jbe  h2
+2C 07                 # 01CC  sub  al,7
+08 C2                 # 01CE  h2: or dl,al
+48 83 C6 02           # 01D0  add  rsi,2
+E8 9F FE FF FF        # 01D4  call EMIT1
+48 FF C3              # 01D9  inc  rbx
+E9 E8 FE FF FF        # 01DC  jmp  TOP
+C3                    # 01E1  DONE: ret
+
+# =========== _start ================================================== 0x1E2
+48 C7 C6 00 00 80 00  # 01E2  mov  rsi,0x800000
+B8 00 00 00 00        # 01E9  RL: mov eax,0        (SYS_read)
+BF 00 00 00 00        # 01EE  mov  edi,0
+BA 00 00 10 00        # 01F3  mov  edx,0x100000
+0F 05                 # 01F8  syscall
+48 85 C0              # 01FA  test rax,rax
+7E 05                 # 01FD  jle  RD
+48 01 C6              # 01FF  add  rsi,rax
+EB E5                 # 0202  jmp  RL
+C6 06 00              # 0204  RD: mov byte [rsi],0
+48 C7 C7 00 00 00 02  # 0207  mov  rdi,0x2000000
+48 C7 C5 01 00 00 00  # 020E  mov  rbp,1
+E8 A1 FE FF FF        # 0215  call RUN
+48 C7 C5 02 00 00 00  # 021A  mov  rbp,2
+E8 95 FE FF FF        # 0221  call RUN
+48 89 FA              # 0226  mov  rdx,rdi
+48 C7 C6 00 00 00 02  # 0229  mov  rsi,0x2000000
+48 29 F2              # 0230  sub  rdx,rsi
+B8 01 00 00 00        # 0233  mov  eax,1           (SYS_write)
+BF 01 00 00 00        # 0238  mov  edi,1
+0F 05                 # 023D  syscall
+B8 3C 00 00 00        # 023F  mov  eax,60          (SYS_exit)
+31 FF                 # 0244  xor  edi,edi
+0F 05                 # 0246  syscall
+#                       0248  end of file

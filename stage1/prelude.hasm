@@ -1,0 +1,143 @@
+# =====================================================================
+#  prelude.hasm -- x86-64 instruction macros used to write cc0.
+#  Register nicknames:  A=rax  C=rcx  D=rdx  S=rsi  I=rdi
+#  Local variables live at [rbp-8*n]; V1..VG are the displacement bytes.
+# =====================================================================
+
+# ---- function frame -------------------------------------------------
+%PROLOG 55 48 89 E5 48 81 EC 80 00 00 00   # push rbp; mov rbp,rsp; sub rsp,128
+%EPILOG 48 89 EC 5D C3                     # mov rsp,rbp; pop rbp; ret
+%ARG1 48 89 7D F8                          # mov [rbp-8],rdi
+%ARG2 48 89 75 F0                          # mov [rbp-16],rsi
+%ARG3 48 89 55 E8                          # mov [rbp-24],rdx
+%ARG4 48 89 4D E0                          # mov [rbp-32],rcx
+
+# ---- local slot displacements ---------------------------------------
+%V1 F8
+%V2 F0
+%V3 E8
+%V4 E0
+%V5 D8
+%V6 D0
+%V7 C8
+%V8 C0
+%V9 B8
+%VA B0
+%VB A8
+%VC A0
+%VD 98
+%VE 90
+%VF 88
+%VG 80
+
+# ---- local loads / stores (operand: one V slot) ---------------------
+%LDA 48 8B 45
+%LDC 48 8B 4D
+%LDD 48 8B 55
+%LDS 48 8B 75
+%LDI 48 8B 7D
+%STA 48 89 45
+%STC 48 89 4D
+%STD 48 89 55
+%LEAL_A 48 8D 45
+%LEAL_S 48 8D 75
+
+# ---- globals, rip relative (operand: @label) ------------------------
+%GDA 48 8B 05
+%GDC 48 8B 0D
+%GDD 48 8B 15
+%GDS 48 8B 35
+%GDI 48 8B 3D
+%GSA 48 89 05
+%GSC 48 89 0D
+%LEA_A 48 8D 05
+
+# ---- immediates -----------------------------------------------------
+%IA B8
+%IC B9
+%ID BA
+%IS BE
+%II BF
+%IMA 48 C7 C0
+
+# ---- register to register -------------------------------------------
+%A_C 48 89 C8
+%A_D 48 89 D0
+%A_S 48 89 F0
+%A_I 48 89 F8
+%C_A 48 89 C1
+%D_A 48 89 C2
+%S_A 48 89 C6
+%I_A 48 89 C7
+%C_D 48 89 D1
+%D_C 48 89 CA
+%S_C 48 89 CE
+%I_C 48 89 CF
+%S_D 48 89 D6
+%I_D 48 89 D7
+%I_S 48 89 F7
+%S_I 48 89 FE
+
+# ---- memory ---------------------------------------------------------
+%LDQ_A 48 8B 00      # mov rax,[rax]
+%LDB_A 48 0F BE 00   # movsx rax,byte [rax]
+%LDZB_A 0F B6 00     # movzx eax,byte [rax]
+%LDQ_AD 48 8B 40     # mov rax,[rax+d8]
+%LDC_AD 48 8B 48     # mov rcx,[rax+d8]
+%LDD_AD 48 8B 50     # mov rdx,[rax+d8]
+%STQ_C 48 89 01      # mov [rcx],rax
+%STB_C 88 01         # mov [rcx],al
+%STQ_CD 48 89 41     # mov [rcx+d8],rax
+
+# ---- arithmetic -----------------------------------------------------
+%ADD_AC 48 01 C8
+%SUB_AC 48 29 C8
+%IMUL_AC 48 0F AF C1
+%AND_AC 48 21 C8
+%OR_AC 48 09 C8
+%XOR_AC 48 31 C8
+%CQO 48 99
+%IDIV_C 48 F7 F9
+%NEG_A 48 F7 D8
+%NOT_A 48 F7 D0
+%ADDI_A 48 05
+%SUBI_A 48 2D
+%ANDI_A 48 25
+%CMPI_A 48 3D
+%CMPI8_A 48 83 F8
+%ADDI8_A 48 83 C0
+%SUBI8_A 48 83 E8
+%SHRI_A 48 C1 E8
+%SHLI_A 48 C1 E0
+%CMP_AC 48 39 C8
+%TEST_A 48 85 C0
+%INC_A 48 FF C0
+%DEC_A 48 FF C8
+
+# ---- stack ----------------------------------------------------------
+%PUSH_A 50
+%PUSH_C 51
+%PUSH_D 52
+%POP_A 58
+%POP_C 59
+%POP_D 5A
+
+# ---- control --------------------------------------------------------
+%JMP E9
+%JE 0F 84
+%JNE 0F 85
+%JL 0F 8C
+%JLE 0F 8E
+%JG 0F 8F
+%JGE 0F 8D
+%JS 0F 88
+%CALL E8
+%RET C3
+%SYSCALL 0F 05
+
+# ---- fixed buffer addresses (immediate operands) --------------------
+%A_SRC 00 00 80 00   # 0x00800000 source text
+%A_OUT 00 00 00 02   # 0x02000000 output text
+%A_GTB 00 00 00 06   # 0x06000000 global symbol table
+%A_LTB 00 00 40 06   # 0x06400000 local symbol table
+%A_STR 00 00 80 06   # 0x06800000 string literal storage

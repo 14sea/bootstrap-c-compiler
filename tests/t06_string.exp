@@ -1,0 +1,4 @@
+len 19
+cmp 0 1 1
+split 4: the quick brown fox
+rev gfedcba

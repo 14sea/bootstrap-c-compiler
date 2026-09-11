@@ -1,0 +1,2752 @@
+# =====================================================================
+#  cc0 -- a compiler for the C subset, written in hex0 macro assembly.
+#
+#  reads a C source file on stdin, writes hex0 assembly on stdout.
+#  Calling convention of the routines below: arguments in rdi,rsi,rdx,rcx
+#  stored immediately into locals V1..V4; result in rax.
+#
+#  Types are encoded as a single integer:
+#      0      char
+#      1      int / long / void
+#      t+2    pointer to t
+#  so size(t) = 1 when t==0 else 8.
+# =====================================================================
+7F 45 4C 46 02 01 01 00 00 00 00 00 00 00 00 00
+02 00 3E 00 01 00 00 00
+$__start
+40 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00 40 00 38 00 01 00 40 00 00 00 00 00
+01 00 00 00 07 00 00 00
+00 00 00 00 00 00 00 00
+00 00 40 00 00 00 00 00
+00 00 40 00 00 00 00 00
+~__end 00 00 00 00
+00 00 00 08 00 00 00 00
+00 10 00 00 00 00 00 00
+
+# ---------------------------------------------------------------- start
+:__start
+48 C7 C6 00 00 80 00       # mov rsi,0x800000
+:rd1
+B8 00 00 00 00             # mov eax,0     (read)
+BF 00 00 00 00             # mov edi,0
+BA 00 00 10 00             # mov edx,0x100000
+0F 05                      # syscall
+48 85 C0                   # test rax,rax
+0F 8E @rd2                 # jle rd2
+48 01 C6                   # add rsi,rax
+E9 @rd1
+:rd2
+C6 06 00                   # mov byte [rsi],0
+IA A_SRC
+GSA @g_src
+IA A_OUT
+GSA @g_out
+IA 01 00 00 00
+GSA @g_line
+CALL @compile
+GDA @g_out
+D_A
+48 C7 C6 00 00 00 02       # mov rsi,0x2000000
+48 29 F2                   # sub rdx,rsi
+B8 01 00 00 00             # mov eax,1     (write)
+BF 01 00 00 00             # mov edi,1
+0F 05
+B8 3C 00 00 00             # mov eax,60    (exit)
+31 FF
+0F 05
+
+# ---------------------------------------------------- void emit_ch(c)
+:emit_ch
+PROLOG
+ARG1
+GDC @g_out
+LDA V1
+STB_C
+INC_A
+GDA @g_out
+INC_A
+GSA @g_out
+EPILOG
+
+# ------------------------------------------------- void emit_s(char*)
+:emit_s
+PROLOG
+ARG1
+:es1
+LDA V1
+LDZB_A
+TEST_A
+JE @es2
+LDA V1
+LDZB_A
+I_A
+CALL @emit_ch
+LDA V1
+INC_A
+STA V1
+JMP @es1
+:es2
+EPILOG
+
+# ------------------------------------------------------- int hexc(n)
+:hexc
+PROLOG
+ARG1
+LDA V1
+CMPI8_A 0A
+JGE @hc1
+ADDI_A 30 00 00 00
+EPILOG
+:hc1
+ADDI_A 37 00 00 00
+EPILOG
+
+# --------------------------------------------- void emit_hb(b)  "XX "
+:emit_hb
+PROLOG
+ARG1
+LDA V1
+SHRI_A 04
+ANDI_A 0F 00 00 00
+I_A
+CALL @hexc
+I_A
+CALL @emit_ch
+LDA V1
+ANDI_A 0F 00 00 00
+I_A
+CALL @hexc
+I_A
+CALL @emit_ch
+II 20 00 00 00
+CALL @emit_ch
+EPILOG
+
+# ------------------------------------------ void emit_nb(value,count)
+:emit_nb
+PROLOG
+ARG1
+ARG2
+:enb1
+LDA V2
+TEST_A
+JE @enb2
+LDA V1
+ANDI_A FF 00 00 00
+I_A
+CALL @emit_hb
+LDA V1
+SHRI_A 08
+STA V1
+LDA V2
+DEC_A
+STA V2
+JMP @enb1
+:enb2
+EPILOG
+
+# ------------------------------------------------- void emit_dec(n)
+:emit_dec
+PROLOG
+ARG1
+LDA V1
+CMPI8_A 0A
+JL @ed1
+LDA V1
+CQO
+IC 0A 00 00 00
+IDIV_C
+I_A
+CALL @emit_dec
+:ed1
+LDA V1
+CQO
+IC 0A 00 00 00
+IDIV_C
+A_D
+ADDI_A 30 00 00 00
+I_A
+CALL @emit_ch
+EPILOG
+
+# -------------------------------------------------- void werr(char*)
+:werr
+PROLOG
+ARG1
+LDA V1
+STA V2
+:we1
+LDA V2
+LDZB_A
+TEST_A
+JE @we2
+LDA V2
+INC_A
+STA V2
+JMP @we1
+:we2
+LDA V2
+LDC V1
+SUB_AC
+D_A
+LDS V1
+IA 01 00 00 00
+II 02 00 00 00
+SYSCALL
+EPILOG
+
+# ------------------------------------------------- void werrdec(n)
+:werrdec
+PROLOG
+ARG1
+LDA V1
+CMPI8_A 0A
+JL @wd1
+LDA V1
+CQO
+IC 0A 00 00 00
+IDIV_C
+I_A
+CALL @werrdec
+:wd1
+LDA V1
+CQO
+IC 0A 00 00 00
+IDIV_C
+A_D
+ADDI_A 30 00 00 00
+STA V2
+LEAL_S V2
+ID 01 00 00 00
+IA 01 00 00 00
+II 02 00 00 00
+SYSCALL
+EPILOG
+
+# --------------------------------------------------- void die(char*)
+:die
+PROLOG
+ARG1
+LEA_A @s_cc0
+I_A
+CALL @werr
+LDA V1
+I_A
+CALL @werr
+LEA_A @s_ln
+I_A
+CALL @werr
+GDA @g_line
+I_A
+CALL @werrdec
+LEA_A @s_nl
+I_A
+CALL @werr
+IA 3C 00 00 00
+II 01 00 00 00
+SYSCALL
+EPILOG
+
+# --------------------------------- int meq(char *a, char *b, long n)
+:meq
+PROLOG
+ARG1
+ARG2
+ARG3
+IA 00 00 00 00
+STA V4
+:mq1
+LDA V4
+LDC V3
+CMP_AC
+JGE @mq3
+LDA V1
+LDC V4
+ADD_AC
+LDZB_A
+STA V5
+LDA V2
+LDC V4
+ADD_AC
+LDZB_A
+LDC V5
+CMP_AC
+JNE @mq2
+LDA V4
+INC_A
+STA V4
+JMP @mq1
+:mq2
+IA 00 00 00 00
+EPILOG
+:mq3
+IA 01 00 00 00
+EPILOG
+
+# ------------------------------- int tokeq(char *s)  token == s ?
+:tokeq
+PROLOG
+ARG1
+GDA @g_tk
+CMPI8_A 01
+JE @tq1
+IA 00 00 00 00
+EPILOG
+:tq1
+LDA V1
+STA V2
+:tq2
+LDA V2
+LDZB_A
+TEST_A
+JE @tq3
+LDA V2
+INC_A
+STA V2
+JMP @tq2
+:tq3
+LDA V2
+LDC V1
+SUB_AC
+GDC @g_tl
+CMP_AC
+JE @tq4
+IA 00 00 00 00
+EPILOG
+:tq4
+GDI @g_tp
+LDS V1
+GDD @g_tl
+CALL @meq
+EPILOG
+
+# ===================================================== lexer =========
+# void adv1()   src = src + 1
+:adv1
+PROLOG
+GDA @g_src
+INC_A
+GSA @g_src
+EPILOG
+
+:isal
+PROLOG
+ARG1
+LDA V1
+CMPI8_A 61
+JL @ia1
+LDA V1
+CMPI8_A 7A
+JG @ia1
+IA 01 00 00 00
+EPILOG
+:ia1
+LDA V1
+CMPI8_A 41
+JL @ia2
+LDA V1
+CMPI8_A 5A
+JG @ia2
+IA 01 00 00 00
+EPILOG
+:ia2
+LDA V1
+CMPI8_A 5F
+JNE @ia3
+IA 01 00 00 00
+EPILOG
+:ia3
+IA 00 00 00 00
+EPILOG
+
+:isdg
+PROLOG
+ARG1
+LDA V1
+CMPI8_A 30
+JL @idg1
+LDA V1
+CMPI8_A 39
+JG @idg1
+IA 01 00 00 00
+EPILOG
+:idg1
+IA 00 00 00 00
+EPILOG
+
+:isan
+PROLOG
+ARG1
+LDI V1
+CALL @isal
+TEST_A
+JNE @ian1
+LDI V1
+CALL @isdg
+EPILOG
+:ian1
+IA 01 00 00 00
+EPILOG
+
+:hexv
+PROLOG
+ARG1
+LDA V1
+CMPI8_A 30
+JL @hx9
+LDA V1
+CMPI8_A 39
+JG @hx1
+LDA V1
+SUBI8_A 30
+EPILOG
+:hx1
+LDA V1
+CMPI8_A 41
+JL @hx9
+LDA V1
+CMPI8_A 46
+JG @hx2
+LDA V1
+SUBI8_A 37
+EPILOG
+:hx2
+LDA V1
+CMPI8_A 61
+JL @hx9
+LDA V1
+CMPI8_A 66
+JG @hx9
+LDA V1
+SUBI8_A 57
+EPILOG
+:hx9
+IMA FF FF FF FF
+EPILOG
+
+# int resc()   read one possibly escaped character, advancing src
+:resc
+PROLOG
+GDA @g_src
+LDZB_A
+STA V1
+CALL @adv1
+LDA V1
+CMPI8_A 5C
+JE @re1
+LDA V1
+EPILOG
+:re1
+GDA @g_src
+LDZB_A
+STA V1
+CALL @adv1
+LDA V1
+CMPI8_A 6E
+JNE @re2
+IA 0A 00 00 00
+EPILOG
+:re2
+LDA V1
+CMPI8_A 74
+JNE @re3
+IA 09 00 00 00
+EPILOG
+:re3
+LDA V1
+CMPI8_A 72
+JNE @re4
+IA 0D 00 00 00
+EPILOG
+:re4
+LDA V1
+CMPI8_A 30
+JNE @re5
+IA 00 00 00 00
+EPILOG
+:re5
+LDA V1
+EPILOG
+
+# void lex()
+:lex
+PROLOG
+:lx0
+GDA @g_src
+LDZB_A
+STA V1
+TEST_A
+JE @lx9
+LDA V1
+CMPI8_A 0A
+JNE @lx1
+GDA @g_line
+INC_A
+GSA @g_line
+CALL @adv1
+JMP @lx0
+:lx1
+LDA V1
+CMPI8_A 20
+JG @lx2
+CALL @adv1
+JMP @lx0
+:lx2
+LDA V1
+CMPI8_A 2F
+JNE @lx9
+GDA @g_src
+ADDI8_A 01
+LDZB_A
+STA V2
+CMPI8_A 2F
+JNE @lx3
+:lx2a
+GDA @g_src
+LDZB_A
+TEST_A
+JE @lx0
+GDA @g_src
+LDZB_A
+CMPI8_A 0A
+JE @lx0
+CALL @adv1
+JMP @lx2a
+:lx3
+LDA V2
+CMPI8_A 2A
+JNE @lx9
+CALL @adv1
+CALL @adv1
+:lx3a
+GDA @g_src
+LDZB_A
+TEST_A
+JE @lx0
+GDA @g_src
+LDZB_A
+CMPI8_A 0A
+JNE @lx3b
+GDA @g_line
+INC_A
+GSA @g_line
+:lx3b
+GDA @g_src
+LDZB_A
+CMPI8_A 2A
+JNE @lx3c
+GDA @g_src
+ADDI8_A 01
+LDZB_A
+CMPI8_A 2F
+JNE @lx3c
+CALL @adv1
+CALL @adv1
+JMP @lx0
+:lx3c
+CALL @adv1
+JMP @lx3a
+:lx9
+GDA @g_src
+LDZB_A
+STA V1
+TEST_A
+JNE @lx10
+IA 00 00 00 00
+GSA @g_tk
+EPILOG
+:lx10
+LDI V1
+CALL @isal
+TEST_A
+JE @lx20
+GDA @g_src
+GSA @g_tp
+:lx11
+GDA @g_src
+LDZB_A
+I_A
+CALL @isan
+TEST_A
+JE @lx12
+CALL @adv1
+JMP @lx11
+:lx12
+GDA @g_src
+GDC @g_tp
+SUB_AC
+GSA @g_tl
+IA 01 00 00 00
+GSA @g_tk
+EPILOG
+:lx20
+LDI V1
+CALL @isdg
+TEST_A
+JE @lx30
+IA 00 00 00 00
+GSA @g_tv
+LDA V1
+CMPI8_A 30
+JNE @lx22
+GDA @g_src
+ADDI8_A 01
+LDZB_A
+STA V2
+CMPI8_A 78
+JE @lx21
+LDA V2
+CMPI8_A 58
+JNE @lx22
+:lx21
+CALL @adv1
+CALL @adv1
+:lx21a
+GDA @g_src
+LDZB_A
+I_A
+CALL @hexv
+TEST_A
+JS @lx23
+STA V2
+GDA @g_tv
+SHLI_A 04
+LDC V2
+ADD_AC
+GSA @g_tv
+CALL @adv1
+JMP @lx21a
+:lx22
+GDA @g_src
+LDZB_A
+I_A
+CALL @isdg
+TEST_A
+JE @lx23
+GDA @g_tv
+IC 0A 00 00 00
+IMUL_AC
+STA V2
+GDA @g_src
+LDZB_A
+SUBI8_A 30
+LDC V2
+ADD_AC
+GSA @g_tv
+CALL @adv1
+JMP @lx22
+:lx23
+IA 02 00 00 00
+GSA @g_tk
+EPILOG
+:lx30
+LDA V1
+CMPI8_A 27
+JNE @lx40
+CALL @adv1
+CALL @resc
+GSA @g_tv
+GDA @g_src
+LDZB_A
+CMPI8_A 27
+JE @lx31
+LEA_A @s_ec
+I_A
+CALL @die
+:lx31
+CALL @adv1
+IA 02 00 00 00
+GSA @g_tk
+EPILOG
+:lx40
+LDA V1
+CMPI8_A 22
+JNE @lx50
+CALL @adv1
+GDA @g_nstr
+GSA @g_tv
+IA 00 00 00 00
+STA V3
+:lx41
+GDA @g_src
+LDZB_A
+TEST_A
+JE @lx43
+GDA @g_src
+LDZB_A
+CMPI8_A 22
+JE @lx42
+CALL @resc
+STA V4
+IA A_STR
+GDC @g_stro
+ADD_AC
+ADDI8_A 08
+LDC V3
+ADD_AC
+C_A
+LDA V4
+STB_C
+LDA V3
+INC_A
+STA V3
+JMP @lx41
+:lx42
+CALL @adv1
+IA A_STR
+GDC @g_stro
+ADD_AC
+ADDI8_A 08
+LDC V3
+ADD_AC
+C_A
+IA 00 00 00 00
+STB_C
+LDA V3
+INC_A
+STA V3
+IA A_STR
+GDC @g_stro
+ADD_AC
+C_A
+LDA V3
+STQ_C
+GDA @g_stro
+ADDI8_A 08
+LDC V3
+ADD_AC
+GSA @g_stro
+GDA @g_nstr
+INC_A
+GSA @g_nstr
+IA 03 00 00 00
+GSA @g_tk
+EPILOG
+:lx43
+LEA_A @s_es
+I_A
+CALL @die
+:lx50
+IA 04 00 00 00
+GSA @g_tk
+GDA @g_src
+ADDI8_A 01
+LDZB_A
+STA V2
+LEA_A @tw2
+STA V3
+:lx51
+LDA V3
+LDZB_A
+TEST_A
+JE @lx55
+LDA V3
+LDZB_A
+LDC V1
+CMP_AC
+JNE @lx52
+LDA V3
+ADDI8_A 01
+LDZB_A
+LDC V2
+CMP_AC
+JNE @lx52
+LDA V3
+ADDI8_A 02
+LDZB_A
+GSA @g_tv
+CALL @adv1
+CALL @adv1
+EPILOG
+:lx52
+LDA V3
+ADDI8_A 03
+STA V3
+JMP @lx51
+:lx55
+LDA V1
+GSA @g_tv
+CALL @adv1
+EPILOG
+
+# ============================ tokens, symbols, labels ================
+# int isp(long code)   current token is that punctuator ?
+:isp
+PROLOG
+ARG1
+GDA @g_tk
+CMPI8_A 04
+JNE @ip0
+GDA @g_tv
+LDC V1
+CMP_AC
+JNE @ip0
+IA 01 00 00 00
+EPILOG
+:ip0
+IA 00 00 00 00
+EPILOG
+
+# void expect(long code)
+:expect
+PROLOG
+ARG1
+LDI V1
+CALL @isp
+TEST_A
+JNE @xp1
+LEA_A @s_exp
+I_A
+CALL @die
+:xp1
+CALL @lex
+EPILOG
+
+# long newlbl()
+:newlbl
+PROLOG
+GDA @g_lbl
+INC_A
+GSA @g_lbl
+EPILOG
+
+# void deflbl(long n)     ":L<n>"
+:deflbl
+PROLOG
+ARG1
+II 3A 00 00 00
+CALL @emit_ch
+II 4C 00 00 00
+CALL @emit_ch
+LDI V1
+CALL @emit_dec
+II 0A 00 00 00
+CALL @emit_ch
+EPILOG
+
+# void refl(long n)       "@L<n> "
+:refl
+PROLOG
+ARG1
+II 40 00 00 00
+CALL @emit_ch
+II 4C 00 00 00
+CALL @emit_ch
+LDI V1
+CALL @emit_dec
+II 20 00 00 00
+CALL @emit_ch
+EPILOG
+
+:gjmp
+PROLOG
+ARG1
+LEA_A @c_jmp
+I_A
+CALL @emit_s
+LDI V1
+CALL @refl
+EPILOG
+
+:gje
+PROLOG
+ARG1
+LEA_A @c_je
+I_A
+CALL @emit_s
+LDI V1
+CALL @refl
+EPILOG
+
+:gjne
+PROLOG
+ARG1
+LEA_A @c_jne
+I_A
+CALL @emit_s
+LDI V1
+CALL @refl
+EPILOG
+
+# void emit_name(char *p, long l)
+:emit_name
+PROLOG
+ARG1
+ARG2
+IA 00 00 00 00
+STA V3
+:enm1
+LDA V3
+LDC V2
+CMP_AC
+JGE @enm2
+LDA V1
+LDC V3
+ADD_AC
+LDZB_A
+I_A
+CALL @emit_ch
+LDA V3
+INC_A
+STA V3
+JMP @enm1
+:enm2
+EPILOG
+
+# void *sfind(char *p, long l)
+:sfind
+PROLOG
+ARG1
+ARG2
+GDA @g_nloc
+STA V3
+:sf1
+LDA V3
+TEST_A
+JE @sf3
+LDA V3
+DEC_A
+STA V3
+IA A_LTB
+STA V4
+LDA V3
+IC 28 00 00 00
+IMUL_AC
+LDC V4
+ADD_AC
+STA V5
+LDA V5
+LDQ_AD 08
+LDC V2
+CMP_AC
+JNE @sf1
+LDI V1
+LDA V5
+LDQ_A
+S_A
+LDD V2
+CALL @meq
+TEST_A
+JE @sf1
+LDA V5
+EPILOG
+:sf3
+GDA @g_nglb
+STA V3
+:sf4
+LDA V3
+TEST_A
+JE @sf6
+LDA V3
+DEC_A
+STA V3
+IA A_GTB
+STA V4
+LDA V3
+IC 28 00 00 00
+IMUL_AC
+LDC V4
+ADD_AC
+STA V5
+LDA V5
+LDQ_AD 08
+LDC V2
+CMP_AC
+JNE @sf4
+LDI V1
+LDA V5
+LDQ_A
+S_A
+LDD V2
+CALL @meq
+TEST_A
+JE @sf4
+LDA V5
+EPILOG
+:sf6
+IA 00 00 00 00
+EPILOG
+
+# void *newglb(char *p, long l, long type, long kind)
+:newglb
+PROLOG
+ARG1
+ARG2
+ARG3
+ARG4
+IA A_GTB
+STA V5
+GDA @g_nglb
+IC 28 00 00 00
+IMUL_AC
+LDC V5
+ADD_AC
+STA V5
+LDC V5
+LDA V1
+STQ_C
+LDC V5
+LDA V2
+STQ_CD 08
+LDC V5
+LDA V3
+STQ_CD 10
+LDC V5
+LDA V4
+STQ_CD 18
+LDC V5
+IA 00 00 00 00
+STQ_CD 20
+GDA @g_nglb
+INC_A
+GSA @g_nglb
+LDA V5
+EPILOG
+
+# void *newloc(char *p, long l, long type, long kind)
+:newloc
+PROLOG
+ARG1
+ARG2
+ARG3
+ARG4
+IA A_LTB
+STA V5
+GDA @g_nloc
+IC 28 00 00 00
+IMUL_AC
+LDC V5
+ADD_AC
+STA V5
+LDC V5
+LDA V1
+STQ_C
+LDC V5
+LDA V2
+STQ_CD 08
+LDC V5
+LDA V3
+STQ_CD 10
+LDC V5
+LDA V4
+STQ_CD 18
+LDC V5
+IA 00 00 00 00
+STQ_CD 20
+GDA @g_nloc
+INC_A
+GSA @g_nloc
+LDA V5
+EPILOG
+
+# long ptype()   parse a type; -1 if the token does not start one
+:ptype
+PROLOG
+GDA @g_tk
+CMPI8_A 01
+JE @pt1
+IMA FF FF FF FF
+EPILOG
+:pt1
+LEA_A @s_char
+I_A
+CALL @tokeq
+TEST_A
+JE @pt2
+IA 00 00 00 00
+STA V1
+JMP @pt5
+:pt2
+LEA_A @s_int
+I_A
+CALL @tokeq
+TEST_A
+JNE @pt4
+LEA_A @s_long
+I_A
+CALL @tokeq
+TEST_A
+JNE @pt4
+LEA_A @s_void
+I_A
+CALL @tokeq
+TEST_A
+JNE @pt4
+IMA FF FF FF FF
+EPILOG
+:pt4
+IA 01 00 00 00
+STA V1
+:pt5
+CALL @lex
+:pt6
+II 2A 00 00 00
+CALL @isp
+TEST_A
+JE @pt7
+LDA V1
+ADDI8_A 02
+STA V1
+CALL @lex
+JMP @pt6
+:pt7
+LDA V1
+EPILOG
+
+# void load()    turn an lvalue in rax into its value
+:load
+PROLOG
+GDA @g_lv
+TEST_A
+JE @ld1
+GDA @g_ty
+TEST_A
+JNE @ld2
+LEA_A @c_ldb
+I_A
+CALL @emit_s
+JMP @ld3
+:ld2
+LEA_A @c_ldq
+I_A
+CALL @emit_s
+:ld3
+IA 00 00 00 00
+GSA @g_lv
+:ld1
+EPILOG
+
+# ========================== expressions ==============================
+# int nameq(char *p, long l, char *s)
+:nameq
+PROLOG
+ARG1
+ARG2
+ARG3
+LDA V3
+STA V4
+:nq1
+LDA V4
+LDZB_A
+TEST_A
+JE @nq2
+LDA V4
+INC_A
+STA V4
+JMP @nq1
+:nq2
+LDA V4
+LDC V3
+SUB_AC
+LDC V2
+CMP_AC
+JE @nq3
+IA 00 00 00 00
+EPILOG
+:nq3
+LDI V1
+LDS V3
+LDD V2
+CALL @meq
+EPILOG
+
+# long builtin(char *p, long l)   syscall number, or -1
+:builtin
+PROLOG
+ARG1
+ARG2
+LDI V1
+LDS V2
+LEA_A @s_bread
+D_A
+CALL @nameq
+TEST_A
+JE @bi2
+IA 00 00 00 00
+EPILOG
+:bi2
+LDI V1
+LDS V2
+LEA_A @s_bwrite
+D_A
+CALL @nameq
+TEST_A
+JE @bi3
+IA 01 00 00 00
+EPILOG
+:bi3
+LDI V1
+LDS V2
+LEA_A @s_bopen
+D_A
+CALL @nameq
+TEST_A
+JE @bi4
+IA 02 00 00 00
+EPILOG
+:bi4
+LDI V1
+LDS V2
+LEA_A @s_bclose
+D_A
+CALL @nameq
+TEST_A
+JE @bi5
+IA 03 00 00 00
+EPILOG
+:bi5
+LDI V1
+LDS V2
+LEA_A @s_blseek
+D_A
+CALL @nameq
+TEST_A
+JE @bi6
+IA 08 00 00 00
+EPILOG
+:bi6
+LDI V1
+LDS V2
+LEA_A @s_bexit
+D_A
+CALL @nameq
+TEST_A
+JE @bi9
+IA 3C 00 00 00
+EPILOG
+:bi9
+IMA FF FF FF FF
+EPILOG
+
+# void gcall(char *p, long l)
+:gcall
+PROLOG
+ARG1
+ARG2
+CALL @lex
+IA 00 00 00 00
+STA V3
+:gc1
+II 29 00 00 00
+CALL @isp
+TEST_A
+JNE @gc3
+II 01 00 00 00
+CALL @expr
+CALL @load
+LEA_A @c_pusha
+I_A
+CALL @emit_s
+LDA V3
+INC_A
+STA V3
+II 2C 00 00 00
+CALL @isp
+TEST_A
+JE @gc3
+CALL @lex
+JMP @gc1
+:gc3
+II 29 00 00 00
+CALL @expect
+:gc4
+LDA V3
+TEST_A
+JE @gc6
+LDA V3
+DEC_A
+STA V3
+LEA_A @t_pop
+STA V4
+LDA V3
+IC 08 00 00 00
+IMUL_AC
+LDC V4
+ADD_AC
+I_A
+CALL @emit_s
+JMP @gc4
+:gc6
+LDI V1
+LDS V2
+CALL @builtin
+STA V4
+TEST_A
+JS @gc7
+LEA_A @c_movi2
+I_A
+CALL @emit_s
+LDI V4
+IS 04 00 00 00
+CALL @emit_nb
+LEA_A @c_sysc
+I_A
+CALL @emit_s
+JMP @gc8
+:gc7
+LEA_A @c_call
+I_A
+CALL @emit_s
+LDI V1
+LDS V2
+CALL @emit_name
+II 20 00 00 00
+CALL @emit_ch
+:gc8
+IA 01 00 00 00
+GSA @g_ty
+IA 00 00 00 00
+GSA @g_lv
+EPILOG
+
+# void primary()
+:primary
+PROLOG
+GDA @g_tk
+CMPI8_A 02
+JNE @pr10
+LEA_A @c_movabs
+I_A
+CALL @emit_s
+GDI @g_tv
+IS 08 00 00 00
+CALL @emit_nb
+CALL @lex
+IA 01 00 00 00
+GSA @g_ty
+IA 00 00 00 00
+GSA @g_lv
+EPILOG
+:pr10
+GDA @g_tk
+CMPI8_A 03
+JNE @pr20
+LEA_A @c_movi
+I_A
+CALL @emit_s
+GDI @g_tv
+CALL @emit_dec
+II 20 00 00 00
+CALL @emit_ch
+CALL @lex
+IA 02 00 00 00
+GSA @g_ty
+IA 00 00 00 00
+GSA @g_lv
+EPILOG
+:pr20
+II 28 00 00 00
+CALL @isp
+TEST_A
+JE @pr30
+CALL @lex
+II 01 00 00 00
+CALL @expr
+II 29 00 00 00
+CALL @expect
+EPILOG
+:pr30
+GDA @g_tk
+CMPI8_A 01
+JE @pr31
+LEA_A @s_bx
+I_A
+CALL @die
+:pr31
+GDA @g_tp
+STA V1
+GDA @g_tl
+STA V2
+CALL @lex
+II 28 00 00 00
+CALL @isp
+TEST_A
+JE @pr40
+LDI V1
+LDS V2
+CALL @gcall
+EPILOG
+:pr40
+LDI V1
+LDS V2
+CALL @sfind
+STA V3
+TEST_A
+JNE @pr41
+LEA_A @s_unk
+I_A
+CALL @die
+:pr41
+LDA V3
+LDQ_AD 20
+STA V4
+TEST_A
+JS @pr42
+LEA_A @c_movi2
+I_A
+CALL @emit_s
+LDI V4
+IS 04 00 00 00
+CALL @emit_nb
+JMP @pr43
+:pr42
+LEA_A @c_lea
+I_A
+CALL @emit_s
+LDI V4
+IS 04 00 00 00
+CALL @emit_nb
+:pr43
+LDA V3
+LDQ_AD 18
+CMPI8_A 01
+JNE @pr44
+LDA V3
+LDQ_AD 10
+ADDI8_A 02
+GSA @g_ty
+IA 00 00 00 00
+GSA @g_lv
+EPILOG
+:pr44
+LDA V3
+LDQ_AD 10
+GSA @g_ty
+IA 01 00 00 00
+GSA @g_lv
+EPILOG
+
+# void postfix()
+:postfix
+PROLOG
+CALL @primary
+:po1
+II 5B 00 00 00
+CALL @isp
+TEST_A
+JE @po9
+CALL @lex
+CALL @load
+GDA @g_ty
+CMPI8_A 02
+JGE @po2
+LEA_A @s_ptr
+I_A
+CALL @die
+:po2
+GDA @g_ty
+STA V1
+LEA_A @c_pusha
+I_A
+CALL @emit_s
+II 01 00 00 00
+CALL @expr
+CALL @load
+LDA V1
+SUBI8_A 02
+TEST_A
+JE @po3
+LEA_A @c_shl3a
+I_A
+CALL @emit_s
+:po3
+LEA_A @c_addidx
+I_A
+CALL @emit_s
+II 5D 00 00 00
+CALL @expect
+LDA V1
+SUBI8_A 02
+GSA @g_ty
+IA 01 00 00 00
+GSA @g_lv
+JMP @po1
+:po9
+EPILOG
+
+# void unary()
+:unary
+PROLOG
+GDA @g_tk
+CMPI8_A 04
+JNE @un9
+GDA @g_tv
+STA V1
+CMPI8_A 2D
+JNE @un2
+CALL @lex
+CALL @unary
+CALL @load
+LEA_A @c_neg
+I_A
+CALL @emit_s
+IA 01 00 00 00
+GSA @g_ty
+IA 00 00 00 00
+GSA @g_lv
+EPILOG
+:un2
+LDA V1
+CMPI8_A 21
+JNE @un3
+CALL @lex
+CALL @unary
+CALL @load
+LEA_A @c_lnot
+I_A
+CALL @emit_s
+IA 01 00 00 00
+GSA @g_ty
+IA 00 00 00 00
+GSA @g_lv
+EPILOG
+:un3
+LDA V1
+CMPI8_A 7E
+JNE @un4
+CALL @lex
+CALL @unary
+CALL @load
+LEA_A @c_not
+I_A
+CALL @emit_s
+IA 01 00 00 00
+GSA @g_ty
+IA 00 00 00 00
+GSA @g_lv
+EPILOG
+:un4
+LDA V1
+CMPI8_A 2A
+JNE @un5
+CALL @lex
+CALL @unary
+CALL @load
+GDA @g_ty
+CMPI8_A 02
+JGE @un4a
+LEA_A @s_ptr
+I_A
+CALL @die
+:un4a
+GDA @g_ty
+SUBI8_A 02
+GSA @g_ty
+IA 01 00 00 00
+GSA @g_lv
+EPILOG
+:un5
+LDA V1
+CMPI8_A 26
+JNE @un6
+CALL @lex
+CALL @unary
+GDA @g_lv
+TEST_A
+JNE @un5a
+LEA_A @s_lval
+I_A
+CALL @die
+:un5a
+IA 00 00 00 00
+GSA @g_lv
+GDA @g_ty
+ADDI8_A 02
+GSA @g_ty
+EPILOG
+:un6
+LDA V1
+CMPI8_A 2B
+JNE @un9
+CALL @lex
+CALL @unary
+EPILOG
+:un9
+CALL @postfix
+EPILOG
+
+# long prec(long op)
+:prec
+PROLOG
+ARG1
+LDA V1
+CMPI8_A 06
+JNE @pc1
+IA 02 00 00 00
+EPILOG
+:pc1
+LDA V1
+CMPI8_A 05
+JNE @pc2
+IA 03 00 00 00
+EPILOG
+:pc2
+LDA V1
+CMPI8_A 7C
+JNE @pc3
+IA 04 00 00 00
+EPILOG
+:pc3
+LDA V1
+CMPI8_A 5E
+JNE @pc4
+IA 05 00 00 00
+EPILOG
+:pc4
+LDA V1
+CMPI8_A 26
+JNE @pc5
+IA 06 00 00 00
+EPILOG
+:pc5
+LDA V1
+CMPI8_A 01
+JE @pc5a
+LDA V1
+CMPI8_A 02
+JNE @pc6
+:pc5a
+IA 07 00 00 00
+EPILOG
+:pc6
+LDA V1
+CMPI8_A 3C
+JE @pc6a
+LDA V1
+CMPI8_A 3E
+JE @pc6a
+LDA V1
+CMPI8_A 03
+JE @pc6a
+LDA V1
+CMPI8_A 04
+JNE @pc7
+:pc6a
+IA 08 00 00 00
+EPILOG
+:pc7
+LDA V1
+CMPI8_A 07
+JE @pc7a
+LDA V1
+CMPI8_A 08
+JNE @pc8
+:pc7a
+IA 09 00 00 00
+EPILOG
+:pc8
+LDA V1
+CMPI8_A 2B
+JE @pc8a
+LDA V1
+CMPI8_A 2D
+JNE @pc9
+:pc8a
+IA 0A 00 00 00
+EPILOG
+:pc9
+LDA V1
+CMPI8_A 2A
+JE @pc9a
+LDA V1
+CMPI8_A 2F
+JE @pc9a
+LDA V1
+CMPI8_A 25
+JNE @pc0
+:pc9a
+IA 0B 00 00 00
+EPILOG
+:pc0
+IA 00 00 00 00
+EPILOG
+
+# void genbin(long op, long lt, long rt)
+:genbin
+PROLOG
+ARG1
+ARG2
+ARG3
+LDA V1
+CMPI8_A 2B
+JNE @gb10
+LDA V2
+CMPI8_A 02
+JL @gb2
+LDA V3
+CMPI8_A 02
+JGE @gb2
+LDA V2
+SUBI8_A 02
+TEST_A
+JE @gb1a
+LEA_A @c_shl3c
+I_A
+CALL @emit_s
+:gb1a
+LEA_A @c_add
+I_A
+CALL @emit_s
+LDA V2
+GSA @g_ty
+JMP @gbz
+:gb2
+LDA V2
+CMPI8_A 02
+JGE @gb3
+LDA V3
+CMPI8_A 02
+JL @gb3
+LDA V3
+SUBI8_A 02
+TEST_A
+JE @gb2a
+LEA_A @c_shl3a
+I_A
+CALL @emit_s
+:gb2a
+LEA_A @c_add
+I_A
+CALL @emit_s
+LDA V3
+GSA @g_ty
+JMP @gbz
+:gb3
+LEA_A @c_add
+I_A
+CALL @emit_s
+IA 01 00 00 00
+GSA @g_ty
+JMP @gbz
+:gb10
+LDA V1
+CMPI8_A 2D
+JNE @gb20
+LDA V2
+CMPI8_A 02
+JL @gb13
+LDA V3
+CMPI8_A 02
+JGE @gb12
+LDA V2
+SUBI8_A 02
+TEST_A
+JE @gb11a
+LEA_A @c_shl3c
+I_A
+CALL @emit_s
+:gb11a
+LEA_A @c_sub
+I_A
+CALL @emit_s
+LDA V2
+GSA @g_ty
+JMP @gbz
+:gb12
+LEA_A @c_sub
+I_A
+CALL @emit_s
+LDA V2
+SUBI8_A 02
+TEST_A
+JE @gb12a
+LEA_A @c_sar3a
+I_A
+CALL @emit_s
+:gb12a
+IA 01 00 00 00
+GSA @g_ty
+JMP @gbz
+:gb13
+LEA_A @c_sub
+I_A
+CALL @emit_s
+IA 01 00 00 00
+GSA @g_ty
+JMP @gbz
+:gb20
+IA 01 00 00 00
+GSA @g_ty
+LDA V1
+CMPI8_A 2A
+JNE @gb21
+LEA_A @c_imul
+I_A
+CALL @emit_s
+JMP @gbz
+:gb21
+LDA V1
+CMPI8_A 2F
+JNE @gb22
+LEA_A @c_idiv
+I_A
+CALL @emit_s
+JMP @gbz
+:gb22
+LDA V1
+CMPI8_A 25
+JNE @gb23
+LEA_A @c_mod
+I_A
+CALL @emit_s
+JMP @gbz
+:gb23
+LDA V1
+CMPI8_A 26
+JNE @gb24
+LEA_A @c_and
+I_A
+CALL @emit_s
+JMP @gbz
+:gb24
+LDA V1
+CMPI8_A 7C
+JNE @gb25
+LEA_A @c_or
+I_A
+CALL @emit_s
+JMP @gbz
+:gb25
+LDA V1
+CMPI8_A 5E
+JNE @gb26
+LEA_A @c_xor
+I_A
+CALL @emit_s
+JMP @gbz
+:gb26
+LDA V1
+CMPI8_A 07
+JNE @gb27
+LEA_A @c_shl
+I_A
+CALL @emit_s
+JMP @gbz
+:gb27
+LDA V1
+CMPI8_A 08
+JNE @gb28
+LEA_A @c_sar
+I_A
+CALL @emit_s
+JMP @gbz
+:gb28
+LEA_A @c_cmp
+I_A
+CALL @emit_s
+LDA V1
+CMPI8_A 01
+JNE @gb29
+LEA_A @c_sete
+I_A
+CALL @emit_s
+JMP @gbz
+:gb29
+LDA V1
+CMPI8_A 02
+JNE @gb30
+LEA_A @c_setne
+I_A
+CALL @emit_s
+JMP @gbz
+:gb30
+LDA V1
+CMPI8_A 3C
+JNE @gb31
+LEA_A @c_setl
+I_A
+CALL @emit_s
+JMP @gbz
+:gb31
+LDA V1
+CMPI8_A 3E
+JNE @gb32
+LEA_A @c_setg
+I_A
+CALL @emit_s
+JMP @gbz
+:gb32
+LDA V1
+CMPI8_A 03
+JNE @gb33
+LEA_A @c_setle
+I_A
+CALL @emit_s
+JMP @gbz
+:gb33
+LDA V1
+CMPI8_A 04
+JNE @gb34
+LEA_A @c_setge
+I_A
+CALL @emit_s
+JMP @gbz
+:gb34
+LEA_A @s_op
+I_A
+CALL @die
+:gbz
+IA 00 00 00 00
+GSA @g_lv
+EPILOG
+
+# void expr(long minprec)
+:expr
+PROLOG
+ARG1
+CALL @unary
+:ex1
+GDA @g_tk
+CMPI8_A 04
+JE @ex2
+EPILOG
+:ex2
+GDA @g_tv
+STA V2
+CMPI8_A 3D
+JNE @ex10
+LDA V1
+CMPI8_A 01
+JLE @ex3
+EPILOG
+:ex3
+GDA @g_lv
+TEST_A
+JNE @ex4
+LEA_A @s_lval
+I_A
+CALL @die
+:ex4
+GDA @g_ty
+STA V3
+LEA_A @c_pusha
+I_A
+CALL @emit_s
+CALL @lex
+II 01 00 00 00
+CALL @expr
+CALL @load
+LEA_A @c_popc
+I_A
+CALL @emit_s
+LDA V3
+TEST_A
+JNE @ex5
+LEA_A @c_stb
+I_A
+CALL @emit_s
+JMP @ex6
+:ex5
+LEA_A @c_stq
+I_A
+CALL @emit_s
+:ex6
+LDA V3
+GSA @g_ty
+IA 00 00 00 00
+GSA @g_lv
+JMP @ex1
+:ex10
+LDI V2
+CALL @prec
+STA V4
+TEST_A
+JNE @ex11
+EPILOG
+:ex11
+LDA V4
+LDC V1
+CMP_AC
+JGE @ex12
+EPILOG
+:ex12
+CALL @lex
+LDA V2
+CMPI8_A 05
+JNE @ex20
+CALL @load
+CALL @newlbl
+STA V5
+LEA_A @c_test
+I_A
+CALL @emit_s
+LDI V5
+CALL @gje
+LDA V4
+INC_A
+I_A
+CALL @expr
+CALL @load
+LEA_A @c_test
+I_A
+CALL @emit_s
+LDI V5
+CALL @gje
+LEA_A @c_mov1
+I_A
+CALL @emit_s
+CALL @newlbl
+STA V6
+LDI V6
+CALL @gjmp
+LDI V5
+CALL @deflbl
+LEA_A @c_xor0
+I_A
+CALL @emit_s
+LDI V6
+CALL @deflbl
+IA 01 00 00 00
+GSA @g_ty
+IA 00 00 00 00
+GSA @g_lv
+JMP @ex1
+:ex20
+LDA V2
+CMPI8_A 06
+JNE @ex30
+CALL @load
+CALL @newlbl
+STA V5
+LEA_A @c_test
+I_A
+CALL @emit_s
+LDI V5
+CALL @gjne
+LDA V4
+INC_A
+I_A
+CALL @expr
+CALL @load
+LEA_A @c_test
+I_A
+CALL @emit_s
+LDI V5
+CALL @gjne
+LEA_A @c_xor0
+I_A
+CALL @emit_s
+CALL @newlbl
+STA V6
+LDI V6
+CALL @gjmp
+LDI V5
+CALL @deflbl
+LEA_A @c_mov1
+I_A
+CALL @emit_s
+LDI V6
+CALL @deflbl
+IA 01 00 00 00
+GSA @g_ty
+IA 00 00 00 00
+GSA @g_lv
+JMP @ex1
+:ex30
+CALL @load
+GDA @g_ty
+STA V5
+LEA_A @c_pusha
+I_A
+CALL @emit_s
+LDA V4
+INC_A
+I_A
+CALL @expr
+CALL @load
+GDA @g_ty
+STA V6
+LEA_A @c_movcapa
+I_A
+CALL @emit_s
+LDI V2
+LDS V5
+LDD V6
+CALL @genbin
+JMP @ex1
+
+# ========================== statements ===============================
+:stmt
+PROLOG
+II 7B 00 00 00
+CALL @isp
+TEST_A
+JE @st10
+CALL @lex
+:st1
+II 7D 00 00 00
+CALL @isp
+TEST_A
+JNE @st2
+GDA @g_tk
+TEST_A
+JNE @st1a
+LEA_A @s_eof
+I_A
+CALL @die
+:st1a
+CALL @blkitem
+JMP @st1
+:st2
+CALL @lex
+EPILOG
+:st10
+II 3B 00 00 00
+CALL @isp
+TEST_A
+JE @st20
+CALL @lex
+EPILOG
+:st20
+GDA @g_tk
+CMPI8_A 01
+JNE @st50
+LEA_A @s_if
+I_A
+CALL @tokeq
+TEST_A
+JE @st30
+CALL @lex
+II 28 00 00 00
+CALL @expect
+II 01 00 00 00
+CALL @expr
+CALL @load
+II 29 00 00 00
+CALL @expect
+CALL @newlbl
+STA V1
+LEA_A @c_test
+I_A
+CALL @emit_s
+LDI V1
+CALL @gje
+CALL @stmt
+LEA_A @s_else
+I_A
+CALL @tokeq
+TEST_A
+JNE @st21
+LDI V1
+CALL @deflbl
+EPILOG
+:st21
+CALL @newlbl
+STA V2
+LDI V2
+CALL @gjmp
+LDI V1
+CALL @deflbl
+CALL @lex
+CALL @stmt
+LDI V2
+CALL @deflbl
+EPILOG
+:st30
+LEA_A @s_while
+I_A
+CALL @tokeq
+TEST_A
+JE @st35
+CALL @lex
+CALL @newlbl
+STA V1
+CALL @newlbl
+STA V2
+GDA @g_brk
+STA V3
+GDA @g_cnt
+STA V4
+LDA V2
+GSA @g_brk
+LDA V1
+GSA @g_cnt
+LDI V1
+CALL @deflbl
+II 28 00 00 00
+CALL @expect
+II 01 00 00 00
+CALL @expr
+CALL @load
+II 29 00 00 00
+CALL @expect
+LEA_A @c_test
+I_A
+CALL @emit_s
+LDI V2
+CALL @gje
+CALL @stmt
+LDI V1
+CALL @gjmp
+LDI V2
+CALL @deflbl
+LDA V3
+GSA @g_brk
+LDA V4
+GSA @g_cnt
+EPILOG
+:st35
+LEA_A @s_return
+I_A
+CALL @tokeq
+TEST_A
+JE @st40
+CALL @lex
+II 3B 00 00 00
+CALL @isp
+TEST_A
+JNE @st36
+II 01 00 00 00
+CALL @expr
+CALL @load
+:st36
+II 3B 00 00 00
+CALL @expect
+LEA_A @c_fnepi
+I_A
+CALL @emit_s
+EPILOG
+:st40
+LEA_A @s_break
+I_A
+CALL @tokeq
+TEST_A
+JE @st45
+CALL @lex
+II 3B 00 00 00
+CALL @expect
+GDI @g_brk
+CALL @gjmp
+EPILOG
+:st45
+LEA_A @s_cont
+I_A
+CALL @tokeq
+TEST_A
+JE @st50
+CALL @lex
+II 3B 00 00 00
+CALL @expect
+GDI @g_cnt
+CALL @gjmp
+EPILOG
+:st50
+II 01 00 00 00
+CALL @expr
+CALL @load
+II 3B 00 00 00
+CALL @expect
+EPILOG
+
+# void blkitem()
+:blkitem
+PROLOG
+CALL @ptype
+STA V1
+CMPI8_A 00
+JGE @bk1
+CALL @stmt
+EPILOG
+:bk1
+GDA @g_tk
+CMPI8_A 01
+JE @bk3
+LEA_A @s_name
+I_A
+CALL @die
+:bk3
+GDA @g_tp
+STA V2
+GDA @g_tl
+STA V3
+CALL @lex
+IA 01 00 00 00
+STA V4
+IA 00 00 00 00
+STA V5
+II 5B 00 00 00
+CALL @isp
+TEST_A
+JE @bk4
+CALL @lex
+GDA @g_tv
+STA V4
+CALL @lex
+II 5D 00 00 00
+CALL @expect
+IA 01 00 00 00
+STA V5
+:bk4
+LDA V1
+TEST_A
+JNE @bk5
+LDA V4
+ADDI8_A 07
+ANDI_A F8 FF FF FF
+JMP @bk6
+:bk5
+LDA V4
+SHLI_A 03
+:bk6
+STA V6
+GDA @g_loff
+LDC V6
+ADD_AC
+GSA @g_loff
+CMPI_A 00 10 00 00
+JLE @bk7
+LEA_A @s_frame
+I_A
+CALL @die
+:bk7
+LDI V2
+LDS V3
+LDD V1
+LDC V5
+CALL @newloc
+C_A
+GDA @g_loff
+NEG_A
+STQ_CD 20
+II 2C 00 00 00
+CALL @isp
+TEST_A
+JE @bk8
+CALL @lex
+JMP @bk1
+:bk8
+II 3B 00 00 00
+CALL @expect
+EPILOG
+
+# ========================== declarations =============================
+:decl
+PROLOG
+CALL @ptype
+STA V1
+CMPI8_A 00
+JGE @dc1
+LEA_A @s_type
+I_A
+CALL @die
+:dc1
+GDA @g_tk
+CMPI8_A 01
+JE @dc2
+LEA_A @s_name
+I_A
+CALL @die
+:dc2
+GDA @g_tp
+STA V2
+GDA @g_tl
+STA V3
+CALL @lex
+II 28 00 00 00
+CALL @isp
+TEST_A
+JNE @dc20
+:dc10
+IA 01 00 00 00
+STA V4
+IA 00 00 00 00
+STA V5
+II 5B 00 00 00
+CALL @isp
+TEST_A
+JE @dc11
+CALL @lex
+GDA @g_tv
+STA V4
+CALL @lex
+II 5D 00 00 00
+CALL @expect
+IA 01 00 00 00
+STA V5
+:dc11
+LDA V1
+TEST_A
+JNE @dc12
+LDA V4
+ADDI8_A 07
+ANDI_A F8 FF FF FF
+JMP @dc13
+:dc12
+LDA V4
+SHLI_A 03
+:dc13
+STA V6
+LDI V2
+LDS V3
+LDD V1
+LDC V5
+CALL @newglb
+STA V7
+IA 00 00 00 08
+GDC @g_goff
+ADD_AC
+STA V8
+GDA @g_goff
+LDC V6
+ADD_AC
+GSA @g_goff
+LDC V7
+LDA V8
+STQ_CD 20
+II 2C 00 00 00
+CALL @isp
+TEST_A
+JE @dc14
+CALL @lex
+GDA @g_tk
+CMPI8_A 01
+JE @dc15
+LEA_A @s_name
+I_A
+CALL @die
+:dc15
+GDA @g_tp
+STA V2
+GDA @g_tl
+STA V3
+CALL @lex
+JMP @dc10
+:dc14
+II 3B 00 00 00
+CALL @expect
+EPILOG
+:dc20
+LDI V2
+LDS V3
+LDD V1
+IC 02 00 00 00
+CALL @newglb
+CALL @lex
+IA 00 00 00 00
+GSA @g_nloc
+IA 00 00 00 00
+GSA @g_loff
+IA 00 00 00 00
+STA V4
+:dc21
+II 29 00 00 00
+CALL @isp
+TEST_A
+JNE @dc25
+CALL @ptype
+STA V5
+CMPI8_A 00
+JGE @dc22
+LEA_A @s_type
+I_A
+CALL @die
+:dc22
+GDA @g_tk
+CMPI8_A 01
+JE @dc23
+LEA_A @s_name
+I_A
+CALL @die
+:dc23
+GDA @g_tp
+STA V6
+GDA @g_tl
+STA V7
+CALL @lex
+GDA @g_loff
+ADDI8_A 08
+GSA @g_loff
+LDI V6
+LDS V7
+LDD V5
+IC 00 00 00 00
+CALL @newloc
+C_A
+GDA @g_loff
+NEG_A
+STQ_CD 20
+LDA V4
+INC_A
+STA V4
+II 2C 00 00 00
+CALL @isp
+TEST_A
+JE @dc21
+CALL @lex
+JMP @dc21
+:dc25
+CALL @lex
+II 3B 00 00 00
+CALL @isp
+TEST_A
+JE @dc26
+CALL @lex
+EPILOG
+:dc26
+LEA_A @c_deffn
+I_A
+CALL @emit_s
+LDI V2
+LDS V3
+CALL @emit_name
+II 0A 00 00 00
+CALL @emit_ch
+LEA_A @c_fnpro
+I_A
+CALL @emit_s
+IA 00 00 00 00
+STA V8
+:dc27
+LDA V8
+LDC V4
+CMP_AC
+JGE @dc28
+LEA_A @t_argst
+STA V9
+LDA V8
+IC 0C 00 00 00
+IMUL_AC
+LDC V9
+ADD_AC
+I_A
+CALL @emit_s
+LDA V8
+INC_A
+IC 08 00 00 00
+IMUL_AC
+NEG_A
+I_A
+IS 04 00 00 00
+CALL @emit_nb
+LDA V8
+INC_A
+STA V8
+JMP @dc27
+:dc28
+IA 00 00 00 00
+GSA @g_brk
+IA 00 00 00 00
+GSA @g_cnt
+CALL @stmt
+LEA_A @c_fnepi
+I_A
+CALL @emit_s
+EPILOG
+
+# void compile()
+:compile
+PROLOG
+CALL @lex
+LEA_A @c_hdr
+I_A
+CALL @emit_s
+:cp1
+GDA @g_tk
+TEST_A
+JE @cp2
+CALL @decl
+JMP @cp1
+:cp2
+IA 00 00 00 00
+STA V1
+IA A_STR
+STA V2
+:cp3
+LDA V1
+GDC @g_nstr
+CMP_AC
+JGE @cp5
+LEA_A @c_defs
+I_A
+CALL @emit_s
+LDI V1
+CALL @emit_dec
+II 0A 00 00 00
+CALL @emit_ch
+LDA V2
+LDQ_A
+STA V3
+IA 00 00 00 00
+STA V4
+:cp4
+LDA V4
+LDC V3
+CMP_AC
+JGE @cp4b
+LDA V2
+ADDI8_A 08
+LDC V4
+ADD_AC
+LDZB_A
+I_A
+CALL @emit_hb
+LDA V4
+INC_A
+STA V4
+JMP @cp4
+:cp4b
+II 0A 00 00 00
+CALL @emit_ch
+LDA V2
+ADDI8_A 08
+LDC V3
+ADD_AC
+STA V2
+LDA V1
+INC_A
+STA V1
+JMP @cp3
+:cp5
+LEA_A @c_end
+I_A
+CALL @emit_s
+EPILOG
+
+# ============================== data =================================
+:s_cc0 "cc0: " 00
+:s_ln " near line " 00
+:s_nl 0A 00
+:s_exp "unexpected token" 00
+:s_bx "bad expression" 00
+:s_unk "unknown identifier" 00
+:s_ptr "pointer required" 00
+:s_lval "lvalue required" 00
+:s_op "bad operator" 00
+:s_eof "unexpected end of file" 00
+:s_name "identifier expected" 00
+:s_type "type expected" 00
+:s_frame "function frame overflow" 00
+:s_ec "bad character literal" 00
+:s_es "unterminated string" 00
+:s_char "char" 00
+:s_int "int" 00
+:s_long "long" 00
+:s_void "void" 00
+:s_if "if" 00
+:s_else "else" 00
+:s_while "while" 00
+:s_return "return" 00
+:s_break "break" 00
+:s_cont "continue" 00
+:s_bread "sys_read" 00
+:s_bwrite "sys_write" 00
+:s_bopen "sys_open" 00
+:s_bclose "sys_close" 00
+:s_blseek "sys_lseek" 00
+:s_bexit "sys_exit" 00
+
+:tw2
+3D 3D 01
+21 3D 02
+3C 3D 03
+3E 3D 04
+26 26 05
+7C 7C 06
+3C 3C 07
+3E 3E 08
+00 00 00
+
+:t_pop
+"5F " 00 00 00 00 00
+"5E " 00 00 00 00 00
+"5A " 00 00 00 00 00
+"59 " 00 00 00 00 00
+"41 58 " 00 00
+"41 59 " 00 00
+
+:t_argst
+"48 89 BD " 00 00 00
+"48 89 B5 " 00 00 00
+"48 89 95 " 00 00 00
+"48 89 8D " 00 00 00
+"4C 89 85 " 00 00 00
+"4C 89 8D " 00 00 00
+
+:c_jmp "E9 " 00
+:c_je "0F 84 " 00
+:c_jne "0F 85 " 00
+:c_ldb "48 0F BE 00 " 00
+:c_ldq "48 8B 00 " 00
+:c_movabs "48 B8 " 00
+:c_movi "B8 &S" 00
+:c_movi2 "B8 " 00
+:c_lea "48 8D 85 " 00
+:c_pusha "50 " 00
+:c_popc "59 " 00
+:c_stb "88 01 " 00
+:c_stq "48 89 01 " 00
+:c_test "48 85 C0 " 00
+:c_mov1 "B8 01 00 00 00 " 00
+:c_xor0 "31 C0 " 00
+:c_movcapa "48 89 C1 58 " 00
+:c_neg "48 F7 D8 " 00
+:c_not "48 F7 D0 " 00
+:c_lnot "48 83 F8 00 0F 94 C0 0F B6 C0 " 00
+:c_shl3a "48 C1 E0 03 " 00
+:c_shl3c "48 C1 E1 03 " 00
+:c_sar3a "48 C1 F8 03 " 00
+:c_addidx "48 89 C1 58 48 01 C8 " 00
+:c_add "48 01 C8 " 00
+:c_sub "48 29 C8 " 00
+:c_imul "48 0F AF C1 " 00
+:c_idiv "48 99 48 F7 F9 " 00
+:c_mod "48 99 48 F7 F9 48 89 D0 " 00
+:c_and "48 21 C8 " 00
+:c_or "48 09 C8 " 00
+:c_xor "48 31 C8 " 00
+:c_shl "48 D3 E0 " 00
+:c_sar "48 D3 F8 " 00
+:c_cmp "48 39 C8 " 00
+:c_sete "0F 94 C0 0F B6 C0 " 00
+:c_setne "0F 95 C0 0F B6 C0 " 00
+:c_setl "0F 9C C0 0F B6 C0 " 00
+:c_setg "0F 9F C0 0F B6 C0 " 00
+:c_setle "0F 9E C0 0F B6 C0 " 00
+:c_setge "0F 9D C0 0F B6 C0 " 00
+:c_call "E8 @F_" 00
+:c_sysc "0F 05 " 00
+:c_fnpro "55 48 89 E5 48 81 EC 00 10 00 00 " 00
+:c_fnepi "48 89 EC 5D C3 " 00
+:c_deffn ":F_" 00
+:c_defs ":S" 00
+:c_end ":__e" 0A 00
+
+:c_hdr
+"7F 45 4C 46 02 01 01 00 00 00 00 00 00 00 00 00" 0A
+"02 00 3E 00 01 00 00 00" 0A
+"$__s" 0A
+"40 00 00 00 00 00 00 00" 0A
+"00 00 00 00 00 00 00 00" 0A
+"00 00 00 00 40 00 38 00 01 00 40 00 00 00 00 00" 0A
+"01 00 00 00 07 00 00 00" 0A
+"00 00 00 00 00 00 00 00" 0A
+"00 00 40 00 00 00 00 00" 0A
+"00 00 40 00 00 00 00 00" 0A
+"~__e 00 00 00 00" 0A
+"00 00 00 10 00 00 00 00" 0A
+"00 10 00 00 00 00 00 00" 0A
+":__s" 0A
+"48 8B 3C 24 48 8D 74 24 08 E8 @F_main 48 89 C7 B8 3C 00 00 00 0F 05" 0A
+00
+
+:g_src  00 00 00 00 00 00 00 00
+:g_tk   00 00 00 00 00 00 00 00
+:g_tv   00 00 00 00 00 00 00 00
+:g_tp   00 00 00 00 00 00 00 00
+:g_tl   00 00 00 00 00 00 00 00
+:g_out  00 00 00 00 00 00 00 00
+:g_lbl  00 00 00 00 00 00 00 00
+:g_goff 00 00 00 00 00 00 00 00
+:g_loff 00 00 00 00 00 00 00 00
+:g_nloc 00 00 00 00 00 00 00 00
+:g_nglb 00 00 00 00 00 00 00 00
+:g_nstr 00 00 00 00 00 00 00 00
+:g_stro 00 00 00 00 00 00 00 00
+:g_ty   00 00 00 00 00 00 00 00
+:g_lv   00 00 00 00 00 00 00 00
+:g_brk  00 00 00 00 00 00 00 00
+:g_cnt  00 00 00 00 00 00 00 00
+:g_line 00 00 00 00 00 00 00 00
+:__end
